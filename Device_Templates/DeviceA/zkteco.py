@@ -63,8 +63,8 @@ EXCEL_FILE = os.path.join(SCRIPT_DIR, f"attendance_log_{DEVICE_NAME_SAFE}.xlsx")
 PID_FILE_PATH = os.path.join(SCRIPT_DIR, f"biometrics_{DEVICE_NAME_SAFE}.pid")
 
 # --- Other Constants ---
-SEMATIME_ACCOUNT_ID = "1374737440333"
-SEMATIME_AUTH_TOKEN = "f5704c567d3d44199a1b61f1bf110719"
+SEMATIME_ACCOUNT_ID = "13****33"
+SEMATIME_AUTH_TOKEN = "f57*****719"
 ACCESS_DB_PATH = r"C:\Program Files (x86)\ZKTeco\ZKTime5.0\att2000.mdb"
 db_config = { 'host': 'localhost', 'user': 'root', 'password': '', 'database': 'attendance_systems' }
 POLL_INTERVAL_SECONDS = 3
