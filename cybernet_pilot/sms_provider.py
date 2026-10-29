@@ -15,7 +15,9 @@ def prepare(phone, body):
         if field not in ('sender','sender_id'): raise ValueError('PANDORA_SENDER_FIELD must be sender or sender_id')
         kind=os.getenv('PANDORA_MESSAGE_TYPE','non_customised')
         if kind not in ('Info','non_customised','customised'): raise ValueError('Invalid Pandora message type')
-        return provider,'https://www.sms.thepandoranetworks.com/API/send_sms/',{'username':username,'password':password,'number':number,'message':body,field:sender,'message_type':kind,'message_category':'bulk'},{'Accept':'application/json'}
+        endpoint=os.getenv('PANDORA_API_URL','https://www.sms.thepandoranetworks.com/API/send_sms/')
+        if endpoint not in ('https://www.sms.thepandoranetworks.com/API/send_sms/','https://sms.thepandoranetworks.com/API/send_sms/'):raise ValueError('Use an approved Pandora HTTPS send endpoint')
+        return provider,endpoint,{'username':username,'password':password,'number':number,'message':body,field:sender,'message_type':kind,'message_category':'bulk'},{'Accept':'application/json'}
     if provider=='africastalking':
         key=os.getenv('AT_API_KEY'); username=os.getenv('AT_USERNAME')
         if not key or not username: raise ValueError('Set AT_API_KEY and AT_USERNAME')
@@ -30,15 +32,29 @@ def submit(prepared):
     try:
         # Refuse automatic redirects to avoid forwarding credentials or changing POST to GET.
         response=requests.post(url,data=payload,headers=headers,timeout=20,allow_redirects=False)
-        if 300<=response.status_code<400:return 'UNKNOWN','Redirect refused; verify endpoint with provider before resending.'
-        if response.status_code>=500:return 'UNKNOWN','Provider server error; check provider records before resending.'
-        data=response.json()
+        if 300<=response.status_code<400:
+            from urllib.parse import urlsplit, urljoin
+            target=urlsplit(urljoin(url,response.headers.get('Location','')))
+            # Report only host/path, never redirect query strings or raw response bodies.
+            hint=target.hostname or '(no host)'
+            return 'UNKNOWN',f'HTTP {response.status_code} redirect to host {hint}. No redirect followed. Ask provider for canonical API URL; check records before resend.'
+        if response.status_code>=500:return 'UNKNOWN',f'HTTP {response.status_code} provider server error; check provider records before resending.'
+        try: data=response.json()
+        except ValueError:
+            return 'UNKNOWN',f'HTTP {response.status_code}: response was not JSON. Verify endpoint/authentication with Pandora. Check provider records before resending.'
+        if not isinstance(data,dict):return 'UNKNOWN',f'HTTP {response.status_code}: unexpected JSON structure. Check provider records before resending.'
         if provider=='pandora':
             if response.ok and data.get('success') is True:return 'ACCEPTED','Pandora reports success. Delivery not independently confirmed.'
             if data.get('success') is False:return 'REJECTED','Pandora reports failure. Check credentials, sender, balance and recipient in the provider dashboard.'
-            return 'UNKNOWN','Unexpected Pandora response; check provider records before resending.'
+            return 'UNKNOWN',f'HTTP {response.status_code}: JSON did not contain a boolean success result. Check provider records before resending.'
         recipients=data.get('SMSMessageData',{}).get('Recipients',[])
         if response.ok and recipients and all(x.get('statusCode')==101 for x in recipients):return 'ACCEPTED','Gateway accepted submission. Delivery not independently confirmed.'
         return 'REJECTED','Gateway rejected submission; check provider dashboard.'
-    except Exception:
-        return 'UNKNOWN','Outcome uncertain; check provider records before resending.'
+    except requests.exceptions.SSLError:
+        return 'UNKNOWN','TLS certificate/handshake error. Do not disable TLS verification; check connection/certificates and provider records.'
+    except requests.exceptions.Timeout:
+        return 'UNKNOWN','API request timed out; it may already have been accepted. Check provider records before resending.'
+    except requests.exceptions.ConnectionError:
+        return 'UNKNOWN','API connection/DNS failed. Check internet/firewall and provider records before resending.'
+    except Exception as error:
+        return 'UNKNOWN',f'Unexpected API error ({type(error).__name__}). Check provider records before resending.'

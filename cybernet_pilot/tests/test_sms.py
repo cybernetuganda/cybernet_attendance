@@ -20,3 +20,11 @@ class SmsTests(unittest.TestCase):
  def test_uncertain_never_retried(self):
   with patch('sms_provider.requests.post',side_effect=TimeoutError) as req:
    self.assertEqual(submit(prepare('+256700000000','Test'))[0],'UNKNOWN');self.assertEqual(req.call_count,1)
+ def test_redirect_diagnostic_hides_query(self):
+  response=Mock(status_code=302,headers={'Location':'https://sms.thepandoranetworks.com/API/send_sms/?password=secret'})
+  with patch('sms_provider.requests.post',return_value=response):
+   status,detail=submit(prepare('+256700000000','Test'));self.assertEqual(status,'UNKNOWN');self.assertIn('302',detail);self.assertNotIn('secret',detail)
+ def test_non_json_diagnostic(self):
+  response=Mock(status_code=200);response.json.side_effect=ValueError()
+  with patch('sms_provider.requests.post',return_value=response):
+   status,detail=submit(prepare('+256700000000','Test'));self.assertEqual(status,'UNKNOWN');self.assertIn('not JSON',detail)
