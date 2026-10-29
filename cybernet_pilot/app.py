@@ -5,8 +5,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from flask import Flask, render_template, request, redirect, url_for, flash, Response
 from dotenv import load_dotenv
-load_dotenv()
 ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 app = Flask(__name__)
 app.secret_key = os.getenv('APP_SECRET') or os.urandom(32)
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024
@@ -16,6 +16,9 @@ MODE = os.getenv('APP_MODE', 'demo')
 DIRECTION = os.getenv('DEVICE_DIRECTION', 'PUNCH').upper()
 state = {'device': 'Not tested', 'worker': 'Stopped'}
 worker_lock = threading.Lock()
+sms_lock = threading.Lock()
+auto_sms = False
+sms_thread = None
 
 def now(): return datetime.now(TZ).replace(tzinfo=None)
 def db():
@@ -29,6 +32,10 @@ def init():
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,student_id TEXT,name TEXT,direction TEXT,stamp TEXT,source TEXT,reason TEXT);
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,event_id TEXT UNIQUE,phone TEXT,body TEXT,status TEXT,detail TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);''')
+def recover_dispatch():
+    with db() as c:
+        c.execute("UPDATE messages SET status='UNKNOWN',detail='Application stopped during submission; check provider before resending.' WHERE status='SUBMITTING'")
+        c.execute("UPDATE messages SET status='CANCELLED',detail='Automatic sending resets to OFF after restart.' WHERE status='QUEUED'")
 
 def ingest(student_id, stamp, punch, source='K40', historical=False):
     student_id = str(student_id)
@@ -52,7 +59,7 @@ def ingest(student_id, stamp, punch, source='K40', historical=False):
         c.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?)',(key,student_id,name,direction,stamp.isoformat(),source,reason))
         if reason == 'Eligible':
             body = f"{os.getenv('SCHOOL_NAME','Cybernet Demo School')}: {name} recorded {direction} at {stamp:%H:%M} on {stamp:%d %b %Y}."
-            status = 'SIMULATED' if source == 'DEMO' else 'DRY_RUN'
+            status = 'SIMULATED' if source == 'DEMO' else ('QUEUED' if auto_sms and MODE == 'device' else 'DRY_RUN')
             c.execute('INSERT INTO messages(event_id,phone,body,status) VALUES(?,?,?,?)',(key,s['phone'],body,status))
     return True
 
@@ -101,7 +108,7 @@ def index():
     from flask import session
     session.setdefault('csrf',os.urandom(24).hex())
     with db() as c:
-        return render_template('index.html',mode=MODE,state=state,students=c.execute('SELECT * FROM students ORDER BY name').fetchall(),events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),csrf=session['csrf'])
+        return render_template('index.html',mode=MODE,state=state,students=c.execute('SELECT * FROM students ORDER BY name').fetchall(),events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
 
 @app.post('/students')
 def student():
@@ -151,6 +158,55 @@ def start():
             threading.Thread(target=worker,daemon=True).start()
     return redirect('/')
 
+def dispatch_once():
+    from sms_provider import prepare, submit
+    # Serialize toggling and claiming. An already submitted request cannot be recalled.
+    with sms_lock:
+        if not auto_sms or MODE != 'device': return False
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            r=c.execute("SELECT m.*,e.student_id,e.stamp,e.source FROM messages m JOIN events e ON e.id=m.event_id WHERE m.status='QUEUED' ORDER BY m.id LIMIT 1").fetchone()
+            if not r: return False
+            student=c.execute('SELECT * FROM students WHERE id=?',(r['student_id'],)).fetchone()
+            reason=None
+            if r['source']!='K40': reason='Not a real K40 scan'
+            elif not student or not student['consent'] or student['phone']!=r['phone']: reason='Consent/contact changed; review student record'
+            elif (now()-datetime.fromisoformat(r['stamp'])).total_seconds()>300: reason='Queue expired after five minutes; no current alert sent'
+            if reason:
+                c.execute("UPDATE messages SET status='CANCELLED',detail=? WHERE id=?",(reason,r['id']));return True
+            try: prepared=prepare(r['phone'],r['body'])
+            except ValueError as e:
+                c.execute("UPDATE messages SET status='BLOCKED',detail=? WHERE id=?",(str(e),r['id']));return True
+            c.execute("UPDATE messages SET status='SUBMITTING',detail='Submitting to SMS gateway' WHERE id=? AND status='QUEUED'",(r['id'],))
+    status,detail=submit(prepared)
+    with db() as c:c.execute('UPDATE messages SET status=?,detail=? WHERE id=?',(status,detail,r['id']))
+    return True
+
+def sms_worker():
+    while True:
+        try:
+            if not dispatch_once(): time.sleep(1)
+        except Exception:
+            state['sms_error']='SMS worker error; inspect statuses and restart before continuing.'
+            time.sleep(2)
+
+@app.post('/sms-control')
+def sms_control():
+    global auto_sms,sms_thread
+    if MODE!='device': flash('Automatic sending is available only in device mode.');return redirect('/')
+    enable=request.form.get('action')=='enable'
+    with sms_lock:
+        if enable:
+            if request.form.get('ack')!='on': flash('Tick the live SMS acknowledgement first.');return redirect('/')
+            auto_sms=True
+            if sms_thread is None or not sms_thread.is_alive():
+                sms_thread=threading.Thread(target=sms_worker,daemon=True);sms_thread.start()
+        else:
+            auto_sms=False
+            with db() as c:c.execute("UPDATE messages SET status='CANCELLED',detail='Cancelled when automatic sending was paused.' WHERE status='QUEUED'")
+    flash('Automatic SMS ON for new eligible scans. Start polling if stopped.' if enable else 'Automatic SMS OFF. Pending queue cancelled; a submission already in progress may complete.')
+    return redirect('/')
+
 @app.get('/export')
 def export():
     out=io.StringIO(); w=csv.writer(out); w.writerow(['student_id','name','direction','stamp','source','reason'])
@@ -160,4 +216,6 @@ def export():
     return Response(out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=attendance.csv'})
 
 init()
-if __name__=='__main__': app.run(host='127.0.0.1',port=5000,debug=False)
+if __name__=='__main__':
+    recover_dispatch()
+    app.run(host='127.0.0.1',port=5000,debug=False)

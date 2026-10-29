@@ -1,3 +1,5 @@
+CURRENT RELEASE: PHASE 1 AUTOMATIC SMS. Read PHASE_1_UPDATE.md first; it supersedes older manual-only instructions below.
+
 CYBERNET K40 PILOT - START HERE
 
 1. Install Python 3.11 or 3.12.

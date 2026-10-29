@@ -1,3 +1,5 @@
+CURRENT RELEASE: PHASE 1 AUTOMATIC SMS. Read PHASE_1_UPDATE.md first; it supersedes older manual-only instructions below.
+
 # Cybernet K40 school attendance pilot
 
 ## What has been built

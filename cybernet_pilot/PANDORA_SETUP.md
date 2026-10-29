@@ -1,3 +1,5 @@
+CURRENT RELEASE: PHASE 1 AUTOMATIC SMS. Read PHASE_1_UPDATE.md first; it supersedes older manual-only instructions below.
+
 # Pandora SMS setup for the K40 pilot
 
 Documentation checked: https://sms.thepandoranetworks.com/api
