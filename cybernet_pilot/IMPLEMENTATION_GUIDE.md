@@ -59,6 +59,8 @@ id,name,class_name,phone,consent
 Replace the placeholder phone with a verified consenting test recipient. Consent 1 enables notification preparation; 0 records attendance without preparing a message. Preserve IDs and phone numbers as text when editing spreadsheets. Import replaces matching student records. Changing a contact does not rewrite messages already prepared.
 
 ## 4. Submit one real SMS for a controlled presentation
+
+For Pandora (the default provider), follow PANDORA_SETUP.md. The Africa's Talking instructions below require SMS_PROVIDER=africastalking.
 The web application NEVER sends SMS automatically. DEMO events are SIMULATED and cannot be dispatched by the SMS script. Only fresh eligible K40 events produce DRY_RUN messages.
 
 1. Obtain Africa's Talking SMS API credentials, a funded live account and an authorised sender arrangement for Uganda. Sandbox credentials do not deliver to an ordinary handset.
