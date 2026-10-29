@@ -22,12 +22,24 @@
 <div style="max-height:350px;overflow:auto"><table><thead><tr><th>ID</th><th>Name</th><th>Class</th><th>Guardian</th><th>Consent</th><th>Action</th></tr></thead><tbody>{% for st in students %}<tr><td>{{st.id}}</td><td>{{st.name}}</td><td>{{st.class_name}}</td><td>{{st.phone or 'Not set'}}</td><td><span class="badge">{{'Given' if st.consent else 'Not given'}}</span></td><td><a href="{{url_for('index',edit=st.id)}}#student-register">Edit</a></td></tr>{% else %}<tr><td colspan="6">No matching students.</td></tr>{% endfor %}</tbody></table></div>
 <details><summary>Import students from CSV</summary><p>Define classes first. Required columns: id,name,class_name,phone,consent. Consent must be 0 or 1.</p><form method="post" action="/import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{{csrf}}"><input type="file" name="file" accept=".csv" required><label><input type="checkbox" name="update_existing">Update matching device IDs</label><button>Import CSV</button></form></details></section>
 <section class="card"><h2>{{'Simulate a scan' if mode=='demo' else 'K40 connection'}}</h2>{% if mode=='demo' %}<p>Save a student with a test guardian number and consent, then demonstrate both directions.</p><form method="post" action="/demo"><input type="hidden" name="csrf" value="{{csrf}}"><select name="id">{% for s in all_students %}<option value="{{s.id}}">{{s.name}} ({{s.id}})</option>{% endfor %}</select><select name="direction"><option>IN</option><option>OUT</option></select><button>Record demo scan</button></form>{% else %}<p>First successful poll imports existing records without alerts. Make new scans afterwards.</p>{% for endpoint,label in [('test','Test connection'),('start','Start polling')] %}<form style="display:inline" method="post" action="/{{endpoint}}"><input type="hidden" name="csrf" value="{{csrf}}"><button>{{label}}</button></form>{% endfor %}{% endif %}<p id="device-status">Device: {{state.device}}</p><p id="collector-status">Collector: {{state.worker}}</p><p><a href="/">Refresh dashboard</a> · <a href="/export">Export attendance CSV</a></p><small>Refresh to see new scans. Stop the application with Ctrl+C.</small></section></div>
-<section class="card" id="live-attendance"><h2>Attendance feed</h2><table><tr><th>Time (Kampala)</th><th>Student</th><th>Direction</th><th>Source</th><th>Processing</th></tr>{% for e in events %}<tr><td>{{e.stamp}}</td><td>{{e.name}} / {{e.student_id}}</td><td><span class="badge">{{e.direction}}</span></td><td>{{e.source}}</td><td>{{e.reason}}</td></tr>{% endfor %}</table></section>
+<section class="card" id="attendance"><h2>Attendance feed</h2><p>Search all recorded scans. Dates and times are Uganda local time. Class shows the student's current assignment.</p>
+<form method="get" action="/#attendance" id="attendance-filters">
+<label>Search<input name="att_q" value="{{att.get('att_q','')}}" placeholder="Name, ID or processing reason"></label>
+<label>From<input type="date" name="att_from" value="{{att.get('att_from','')}}"></label><label>To<input type="date" name="att_to" value="{{att.get('att_to','')}}"></label>
+<label>Student name<input name="att_student" value="{{att.get('att_student','')}}"></label><label>Device ID<input name="att_id" value="{{att.get('att_id','')}}"></label>
+<label>Class<select name="att_class"><option value="">All classes</option>{% for cls in classes %}<option {{'selected' if att.get('att_class')==cls.name else ''}}>{{cls.name}}</option>{% endfor %}</select></label>
+{% for key,label,choices in [('att_direction','Direction',['IN','OUT','UNKNOWN']),('att_source','Source',['K40','DEMO']),('att_status','SMS status',['NO_MESSAGE','SIMULATED','DRY_RUN','QUEUED','SUBMITTING','ACCEPTED','REJECTED','UNKNOWN','BLOCKED','CANCELLED'])] %}<label>{{label}}<select name="{{key}}"><option value="">All</option>{% for choice in choices %}<option {{'selected' if att.get(key)==choice else ''}}>{{choice}}</option>{% endfor %}</select></label>{% endfor %}
+<label>Processing contains<input name="att_reason" value="{{att.get('att_reason','')}}" placeholder="e.g. Eligible or consent"></label>
+<label>Order<select name="att_order"><option value="newest">Newest first</option><option value="oldest" {{'selected' if att.get('att_order')=='oldest' else ''}}>Oldest first</option></select></label>
+<label>Rows<select name="att_size">{% for count in [25,50,100] %}<option {{'selected' if att_size==count else ''}}>{{count}}</option>{% endfor %}</select></label><button>Apply filters</button><a href="/#attendance" data-att-reset>Clear filters</a></form>
+<div id="live-attendance"><p role="status">{{att_total}} matching scans · Page {{att_page}} of {{att_pages}} · <a href="{{att_export}}">Export all matching scans</a></p>{% if att_error %}<div class="notice">{{att_error}}</div>{% endif %}
+<div class="attendance-scroll" style="max-height:440px;overflow:auto" tabindex="0" aria-label="Scrollable attendance records"><table><thead><tr><th>Time</th><th>Device ID</th><th>Student</th><th>Class</th><th>Direction</th><th>Source</th><th>Processing</th><th>SMS status</th></tr></thead><tbody>{% for e in att_rows %}<tr><td>{{e.stamp[:19]|replace('T',' ')}}</td><td>{{e.student_id}}</td><td>{{e.name}}</td><td>{{e.class_name or 'Unassigned'}}</td><td>{{e.direction}}</td><td>{{e.source}}</td><td>{{e.reason}}</td><td>{{e.sms_status}}</td></tr>{% else %}<tr><td colspan="8">No scans match these filters. Adjust the dates or clear filters.</td></tr>{% endfor %}</tbody></table></div>
+<p>{% if att_page>1 %}<a href="{{att_prev}}" data-att-page>Previous</a>{% endif %} &nbsp; {% if att_page<att_pages %}<a href="{{att_next}}" data-att-page>Next</a>{% endif %}</p></div></section>
 <section class="card" id="live-messages"><h2>Guardian notification activity</h2><table><tr><th>ID</th><th>Recipient</th><th>Message</th><th>Status</th></tr>{% for m in messages %}<tr><td>{{m.id}}</td><td>{{m.phone}}</td><td>{{m.body}}<br><small>{{m.detail}}</small></td><td>{{m.status}}</td></tr>{% endfor %}</table></section><p><label><input type="checkbox" id="refresh" checked>Update live activity every 10 seconds</label> <small id="live-update-status" role="status">Student forms stay open while live activity updates.</small></p></main><script>
 // Refresh live-only panels. Never reload the page or replace student forms.
 let liveUpdateBusy=false;
-async function updateLivePanels(){
- if(liveUpdateBusy||document.hidden||!document.getElementById('refresh').checked)return;
+async function updateLivePanels(force=false){
+ if(liveUpdateBusy||document.hidden||(!force&&!document.getElementById('refresh').checked))return;
  liveUpdateBusy=true;
  const status=document.getElementById('live-update-status');
  try{
@@ -38,11 +50,23 @@ async function updateLivePanels(){
   if(!fresh.getElementById('live-attendance'))throw new Error('Invalid dashboard response');
   ids.forEach(id=>{
    const current=document.getElementById(id),next=fresh.getElementById(id);
-   if(current&&next){const top=current.scrollTop,left=current.scrollLeft;current.replaceChildren(...next.childNodes);current.scrollTop=top;current.scrollLeft=left;}
+   if(current&&next){const scroll=current.querySelector('.attendance-scroll')||current;const top=scroll.scrollTop,left=scroll.scrollLeft;current.replaceChildren(...next.childNodes);const restored=current.querySelector('.attendance-scroll')||current;restored.scrollTop=top;restored.scrollLeft=left;}
   });
   status.textContent='Live activity updated at '+new Date().toLocaleTimeString()+'. Student forms are unchanged.';
  }catch(error){status.textContent='Live update unavailable. Your form is unchanged; updates will retry.';}
  finally{liveUpdateBusy=false;}
 }
-setInterval(updateLivePanels,10000);
+document.getElementById('attendance-filters').addEventListener('submit',async event=>{
+ event.preventDefault();if(liveUpdateBusy)return;
+ const params=new URLSearchParams(window.location.search);Array.from(params.keys()).filter(k=>k.startsWith('att_')).forEach(k=>params.delete(k));
+ new FormData(event.target).forEach((v,k)=>{if(v)params.set(k,v)});
+ history.replaceState(null,'','/?'+params.toString()+'#attendance');await updateLivePanels(true);
+});
+document.addEventListener('click',async event=>{
+ const reset=event.target.closest('a[data-att-reset]');
+ if(reset){event.preventDefault();if(liveUpdateBusy)return;const params=new URLSearchParams(window.location.search);Array.from(params.keys()).filter(k=>k.startsWith('att_')).forEach(k=>params.delete(k));const form=document.getElementById('attendance-filters');form.querySelectorAll('input').forEach(el=>el.value='');form.querySelectorAll('select').forEach(el=>el.selectedIndex=0);history.replaceState(null,'','/?'+params.toString()+'#attendance');await updateLivePanels(true);return;}
+ const link=event.target.closest('a[data-att-page]');if(!link)return;event.preventDefault();if(liveUpdateBusy)return;
+ history.replaceState(null,'',link.href);await updateLivePanels(true);
+});
+setInterval(()=>updateLivePanels(false),10000);
 </script></html>

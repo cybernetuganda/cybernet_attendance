@@ -109,6 +109,45 @@ def protect():
         if not hmac.compare_digest(request.form.get('csrf',''),str(__import__('flask').session.get('csrf','missing'))):
             return 'Invalid form token',403
 
+def attendance_query(args):
+    clauses=[];params=[]
+    for key,column in [('att_student','e.name'),('att_id','e.student_id'),('att_reason','e.reason')]:
+        value=args.get(key,'').strip()[:100]
+        if value:clauses.append(f"instr(lower({column}),lower(?))>0");params.append(value)
+    q=args.get('att_q','').strip()[:100]
+    if q:
+        clauses.append("(instr(lower(e.name),lower(?))>0 OR instr(e.student_id,?)>0 OR instr(lower(e.reason),lower(?))>0)");params.extend([q,q,q])
+    for key,col in [('att_direction','e.direction'),('att_source','e.source'),('att_class','s.class_name'),('att_status',"COALESCE(m.status,'NO_MESSAGE')")]:
+        value=args.get(key,'').strip()[:100]
+        if value:clauses.append(col+'=?');params.append(value)
+    for key,operator in [('att_from','>='),('att_to','<=')]:
+        value=args.get(key,'')
+        if value:
+            try:datetime.strptime(value,'%Y-%m-%d')
+            except ValueError:raise ValueError('Use valid attendance dates in YYYY-MM-DD format.')
+            clauses.append(f'substr(e.stamp,1,10){operator}?');params.append(value)
+    if args.get('att_from') and args.get('att_to') and args['att_from']>args['att_to']:raise ValueError('From date must not be after To date.')
+    base=" FROM events e LEFT JOIN students s ON s.id=e.student_id LEFT JOIN messages m ON m.event_id=e.id"
+    if clauses:base+=' WHERE '+' AND '.join(clauses)
+    return base,params
+
+def attendance_view(c,args):
+    from urllib.parse import urlencode
+    try:base,params=attendance_query(args);error=''
+    except ValueError as e:base=' FROM events e LEFT JOIN students s ON s.id=e.student_id LEFT JOIN messages m ON m.event_id=e.id WHERE 0';params=[];error=str(e)
+    try:size=int(args.get('att_size',25))
+    except ValueError:size=25
+    if size not in (25,50,100):size=25
+    total=c.execute('SELECT COUNT(*)'+base,params).fetchone()[0];pages=max(1,(total+size-1)//size)
+    try:page=max(1,min(pages,int(args.get('att_page',1))))
+    except ValueError:page=1
+    order='ASC' if args.get('att_order')=='oldest' else 'DESC'
+    rows=c.execute("SELECT e.*,s.class_name,COALESCE(m.status,'NO_MESSAGE') AS sms_status"+base+f' ORDER BY e.stamp {order},e.id {order} LIMIT ? OFFSET ?',params+[size,(page-1)*size]).fetchall()
+    def link(p):
+        values=args.to_dict();values['att_page']=p;return '/?'+urlencode(values)+'#attendance'
+    export_args={k:v for k,v in args.items() if k.startswith('att_')}
+    return dict(att_rows=rows,att_total=total,att_page=page,att_pages=pages,att_size=size,att_error=error,att_prev=link(page-1),att_next=link(page+1),att_export='/export?'+urlencode(export_args),att=args)
+
 @app.route('/')
 def index():
     from flask import session
@@ -121,7 +160,7 @@ def index():
         students=[r for r in all_students if (not q or q.casefold() in ' '.join(str(r[k] or '') for k in ['id','name','phone']).casefold()) and (not class_filter or r['class_name']==class_filter) and (consent_filter not in ('0','1') or r['consent']==int(consent_filter))]
         edit_student=c.execute('SELECT * FROM students WHERE id=?',(request.args.get('edit',''),)).fetchone()
         token=record_token(edit_student) if edit_student else ''
-        return render_template('index.html',mode=MODE,state=state,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
+        return render_template('index.html',mode=MODE,state=state,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'],**attendance_view(c,request.args))
 
 def record_token(row):
     return hashlib.sha256(repr(tuple(row)).encode()).hexdigest()
@@ -281,10 +320,13 @@ def sms_control():
 
 @app.get('/export')
 def export():
-    out=io.StringIO(); w=csv.writer(out); w.writerow(['student_id','name','direction','stamp','source','reason'])
+    try:base,params=attendance_query(request.args)
+    except ValueError as e:return str(e),400
+    out=io.StringIO(); w=csv.writer(out); w.writerow(['student_id','name','current_class','direction','stamp','source','processing','sms_status'])
     with db() as c:
-        for r in c.execute('SELECT student_id,name,direction,stamp,source,reason FROM events ORDER BY stamp'):
-            w.writerow([("'"+str(v)) if str(v).startswith(('=','+','-','@')) else v for v in r])
+        rows=c.execute("SELECT e.student_id,e.name,s.class_name,e.direction,e.stamp,e.source,e.reason,COALESCE(m.status,'NO_MESSAGE')"+base+(' ORDER BY e.stamp ASC,e.id ASC' if request.args.get('att_order')=='oldest' else ' ORDER BY e.stamp DESC,e.id DESC'),params)
+        for r in rows:
+            w.writerow([("'"+str(v)) if str(v).startswith(('=','+','-','@')) else (v or '') for v in r])
     return Response(out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=attendance.csv'})
 
 init()
