@@ -30,9 +30,9 @@ def init():
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,event_id TEXT UNIQUE,phone TEXT,body TEXT,status TEXT,detail TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);''')
 
-def ingest(student_id, stamp, punch, source='F18', historical=False):
+def ingest(student_id, stamp, punch, source='K40', historical=False):
     student_id = str(student_id)
-    direction = DIRECTION if source == 'F18' and DIRECTION in ('IN','OUT') else {0:'IN',1:'OUT'}.get(punch,'UNKNOWN')
+    direction = DIRECTION if source == 'K40' and DIRECTION in ('IN','OUT') else {0:'IN',1:'OUT'}.get(punch,'UNKNOWN')
     key = hashlib.sha256(f'{source}|{student_id}|{stamp.isoformat()}|{punch}'.encode()).hexdigest()
     with db() as c:
         if c.execute('SELECT 1 FROM events WHERE id=?',(key,)).fetchone(): return False
@@ -137,7 +137,7 @@ def test():
     if MODE != 'device': flash('Set APP_MODE=device in .env and restart first.'); return redirect('/')
     try:
         conn=connect()
-        try: flash(f'F18 connection succeeded. Firmware: {conn.get_firmware_version()}')
+        try: flash(f'K40 connection succeeded. Firmware: {conn.get_firmware_version()}')
         finally: conn.disconnect()
     except Exception as e: flash(f'Connection failed: {type(e).__name__}: {e}')
     return redirect('/')

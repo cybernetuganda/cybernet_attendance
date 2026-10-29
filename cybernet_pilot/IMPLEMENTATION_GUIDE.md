@@ -1,9 +1,9 @@
-# Cybernet F18 school attendance pilot
+# Cybernet K40 school attendance pilot
 
 ## What has been built
-A separate Python/Flask pilot in `cybernet_pilot/`, informed by the linked project. Original scripts remain unchanged. SQLite replaces the Access/MySQL dependency for a quick local demonstration. Student CSV import, guardian contact/consent mapping, attendance feed, IN/OUT processing, CSV export, demo scans, F18 connection test, persistent deduplication and manually dispatched SMS are included.
+A separate Python/Flask pilot in `cybernet_pilot/`, informed by the linked project. Original scripts remain unchanged. SQLite replaces the Access/MySQL dependency for a quick local demonstration. Student CSV import, guardian contact/consent mapping, attendance feed, IN/OUT processing, CSV export, demo scans, K40 connection test, persistent deduplication and manually dispatched SMS are included.
 
-This is a local, single-device prototype. No physical F18 or live SMS account was available during development. Automated tests validate application logic, not hardware/network delivery. WhatsApp, automatic SMS dispatch, delivery callbacks, multi-school tenancy and production hosting are not implemented.
+This is a local, single-device prototype. No physical K40 or live SMS account was available during development. Automated tests validate application logic, not hardware/network delivery. WhatsApp, automatic SMS dispatch, delivery callbacks, multi-school tenancy and production hosting are not implemented.
 
 ## 1. Fastest Windows demonstration
 1. Install Python 3.11 or 3.12 from python.org; enable the Python launcher and PATH options.
@@ -24,13 +24,13 @@ Copy-Item .env.example .env
 ```
 Do not overwrite an existing configured .env. Linux: create a Python venv, install requirements, copy .env.example to .env, run python app.py. No XAMPP or ZKTime installation is needed for this pilot.
 
-## 2. Connect the F18
-Use an isolated test terminal or supplier demo unit first. Do not connect this initial prototype to a live gate lock. Keep biometric enrolment on the F18; the application reads attendance only.
+## 2. Connect the K40
+Use an isolated test terminal or supplier demo unit first. Do not connect this initial prototype to a live gate lock. Keep biometric enrolment on the K40; the application reads attendance only.
 
-1. Connect laptop and F18 to the same router using Ethernet. Power the F18 with its specified adapter.
-2. In the F18 communications menu, set an unused static LAN IP matching your router's subnet. Example ONLY: laptop 192.168.1.10, F18 192.168.1.201, subnet 255.255.255.0. Your existing network may differ.
+1. Connect laptop and K40 to the same router using Ethernet. Power the K40 with its specified adapter.
+2. In the K40 communications menu, set an unused static LAN IP matching your router's subnet. Example ONLY: laptop 192.168.1.10, K40 192.168.1.201, subnet 255.255.255.0. Your existing network may differ.
 3. Note the device communication port and communication key/password. The connector defaults to port 4370 and key 0, but these must match the unit. Do not expose this port on the public internet.
-4. Set the F18 date/time to Uganda local time, and verify the laptop clock. The application interprets naive terminal timestamps as Africa/Kampala time.
+4. Set the K40 date/time to Uganda local time, and verify the laptop clock. The application interprets naive terminal timestamps as Africa/Kampala time.
 5. Enrol an adult test volunteer on the terminal as user ID 1001. Save the identical ID in the application. Leading zeros matter.
 6. Close other attendance software during testing to avoid competing sessions.
 7. Edit `.env`:
@@ -45,10 +45,10 @@ POLL_SECONDS=10
 ```
 8. Restart the application, open the dashboard and click Test connection. If it succeeds, click Start polling ONCE.
 9. Wait until the device status shows a successful read. The FIRST read baselines all pre-existing records without alerts. Make your new scans only AFTER that first successful read.
-10. Select/check the terminal's attendance status for IN and OUT, then make one scan of each type. Verify the feed. This pilot expects punch 0=IN, 1=OUT; confirm that your F18 actually emits those codes.
+10. Select/check the terminal's attendance status for IN and OUT, then make one scan of each type. Verify the feed. This pilot expects punch 0=IN, 1=OUT; confirm that your K40 actually emits those codes.
 11. If your firmware does not expose selectable punch codes, use `DEVICE_DIRECTION=IN` for a dedicated entry terminal. For a one-device presentation you may restart with OUT for the exit demonstration, explicitly explaining the manual switch. Do not alternate directions automatically from scan count.
 
-Network troubleshooting: confirm same subnet, power, cable, correct key and port; ping the IP if ICMP is allowed. A failed ping alone does not prove the device service is unavailable. If the device uses UDP, try DEVICE_FORCE_UDP=true and restart. If pyzk cannot communicate with this firmware, obtain the matching official Standalone SDK or TA Push firmware/documentation from the supplier. Do not flash arbitrary firmware. This connector is a test candidate, not a universal F18 guarantee.
+Network troubleshooting: confirm same subnet, power, cable, correct key and port; ping the IP if ICMP is allowed. A failed ping alone does not prove the device service is unavailable. If the device uses UDP, try DEVICE_FORCE_UDP=true and restart. If pyzk cannot communicate with this firmware, obtain the matching official Standalone SDK/documentation from the supplier; do not assume the K40 supports ADMS or TA Push. Do not flash arbitrary firmware. This connector is a test candidate, not a universal K40 guarantee.
 
 ## 3. Student import
 Open `students.example.csv` in a text editor or spreadsheet. Required headers:
@@ -59,7 +59,7 @@ id,name,class_name,phone,consent
 Replace the placeholder phone with a verified consenting test recipient. Consent 1 enables notification preparation; 0 records attendance without preparing a message. Preserve IDs and phone numbers as text when editing spreadsheets. Import replaces matching student records. Changing a contact does not rewrite messages already prepared.
 
 ## 4. Submit one real SMS for a controlled presentation
-The web application NEVER sends SMS automatically. DEMO events are SIMULATED and cannot be dispatched by the SMS script. Only fresh eligible F18 events produce DRY_RUN messages.
+The web application NEVER sends SMS automatically. DEMO events are SIMULATED and cannot be dispatched by the SMS script. Only fresh eligible K40 events produce DRY_RUN messages.
 
 1. Obtain Africa's Talking SMS API credentials, a funded live account and an authorised sender arrangement for Uganda. Sandbox credentials do not deliver to an ordinary handset.
 2. Add the following to `.env` (do not share this file):
@@ -68,7 +68,7 @@ AT_USERNAME=your_live_username
 AT_API_KEY=your_actual_api_key
 AT_SENDER_ID=your_approved_sender
 ```
-3. Make a new F18 scan after baselining, and note its notification ID in the dashboard.
+3. Make a new K40 scan after baselining, and note its notification ID in the dashboard.
 4. From a second terminal in `cybernet_pilot`, preview it, substituting the actual ID:
 ```powershell
 .venv\Scripts\python.exe send_sms.py 1
@@ -84,7 +84,7 @@ No paid messages were sent during development. No credentials are bundled. Live 
 ## 5. Five-minute presentation sequence
 - Explain the problem: parents need timely notice of recorded school entry and exit.
 - Show student ID to guardian mapping.
-- Demonstrate IN and OUT using demo mode OR actual F18 scans.
+- Demonstrate IN and OUT using demo mode OR actual K40 scans.
 - Show timestamps and the prepared parent messages. Clearly label simulated/dry-run messages.
 - For the hardware demo, manually submit one reviewed SMS and show receipt on the consenting volunteer's phone.
 - Scan repeatedly and show duplicate suppression.
@@ -98,7 +98,7 @@ A scan records verification at the terminal; it does not independently prove phy
 - Old records over five minutes, future records over two minutes, unknown punch codes, missing students and missing consent/phone do not prepare messages.
 - On internet recovery, delayed attendance is visible but does not trigger misleading current alerts.
 - Baseline is specific to this pilot database and one device. Do not repoint a baselined database at a different terminal. Use a separate clean database path for a new device.
-- Polling reads the retained device history each cycle. This is adequate only for a small pilot; measure performance with full F18 logs before scaling. The code does not disable the terminal, clear records or upload biometric templates.
+- Polling reads the retained device history each cycle. This is adequate only for a small pilot; measure performance with full K40 logs before scaling. The code does not disable the terminal, clear records or upload biometric templates.
 - Dashboard binds only to localhost. Use it on the presentation laptop. Set DASHBOARD_PASSWORD before use with personal records. Shared/network deployment needs a proper server, HTTPS, authentication, roles, monitoring and deployment work.
 - One message/guardian per event. No absence rule, early-exit authorisation or pickup verification yet.
 - Close the program to stop polling. It is not installed as a Windows background service.
@@ -112,3 +112,8 @@ Five automated checks cover duplicate/repeat handling, consent, old/future/unkno
 ## Source and reuse notes
 Upstream inspected: https://github.com/simiyu-samuel/ZKTeco_SMS_System_v1.0 . No explicit licence file was found in the inspected checkout. Public GitHub visibility alone does not establish commercial reuse permission; obtain the author's permission before distributing/commercialising original upstream code. This pilot was separately authored and leaves upstream code unchanged.
 Device library: https://github.com/fananimi/pyzk is unofficial and GPL-2.0 licensed. Review dependency obligations before distributing a commercial package; a licensed official SDK may be preferable for the product. No claim of licence clearance is made.
+
+## K40-specific checks
+This package targets a K40 with Ethernet TCP/IP, using pyzk network polling. USB report export alone does not provide live alerts. Confirm the actual model and firmware, communications key, and port. K40 variants differ: do not infer card support, battery condition or supply voltage from a generic listing; use the unit label and correct adapter. The terminal's advertised SMS feature does not by itself establish cellular SMS gateway capability. Phone alerts in this pilot use the external SMS API.
+
+No K40 hardware was available during regeneration. Record one IN and one OUT punch, inspect the resulting direction, and use a fixed IN/OUT configuration if punch codes are not available. Original F18 prototype references have been replaced; the network connector is shared, not a newly verified K40 driver.
