@@ -31,7 +31,13 @@ def init():
         c.executescript('''CREATE TABLE IF NOT EXISTS students(id TEXT PRIMARY KEY,name TEXT NOT NULL,class_name TEXT,phone TEXT,consent INTEGER DEFAULT 0);
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,student_id TEXT,name TEXT,direction TEXT,stamp TEXT,source TEXT,reason TEXT);
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,event_id TEXT UNIQUE,phone TEXT,body TEXT,status TEXT,detail TEXT DEFAULT '');
-        CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);''')
+        CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
+        CREATE TABLE IF NOT EXISTS classes(name TEXT PRIMARY KEY COLLATE NOCASE);
+        CREATE TABLE IF NOT EXISTS student_changes(id INTEGER PRIMARY KEY,student_id TEXT,changed_at TEXT,action TEXT);''')
+        if not c.execute("SELECT 1 FROM meta WHERE key='class_catalog_seeded'").fetchone():
+            c.executemany('INSERT OR IGNORE INTO classes(name) VALUES(?)',[(x,) for x in ['Baby','Middle','Top','P1','P2','P3','P4','P5','P6','P7']])
+            c.execute("INSERT INTO meta VALUES('class_catalog_seeded','1')")
+        c.execute("INSERT OR IGNORE INTO classes(name) SELECT DISTINCT TRIM(class_name) FROM students WHERE class_name IS NOT NULL AND TRIM(class_name)!=''")
 def recover_dispatch():
     with db() as c:
         c.execute("UPDATE messages SET status='UNKNOWN',detail='Application stopped during submission; check provider before resending.' WHERE status='SUBMITTING'")
@@ -107,31 +113,97 @@ def protect():
 def index():
     from flask import session
     session.setdefault('csrf',os.urandom(24).hex())
+    q=request.args.get('student_q','').strip()
+    class_filter=request.args.get('student_class','').strip()
+    consent_filter=request.args.get('student_consent','')
     with db() as c:
-        return render_template('index.html',mode=MODE,state=state,students=c.execute('SELECT * FROM students ORDER BY name').fetchall(),events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
+        all_students=c.execute('SELECT * FROM students ORDER BY name COLLATE NOCASE').fetchall()
+        students=[r for r in all_students if (not q or q.casefold() in ' '.join(str(r[k] or '') for k in ['id','name','phone']).casefold()) and (not class_filter or r['class_name']==class_filter) and (consent_filter not in ('0','1') or r['consent']==int(consent_filter))]
+        edit_student=c.execute('SELECT * FROM students WHERE id=?',(request.args.get('edit',''),)).fetchone()
+        token=record_token(edit_student) if edit_student else ''
+        return render_template('index.html',mode=MODE,state=state,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
+
+def record_token(row):
+    return hashlib.sha256(repr(tuple(row)).encode()).hexdigest()
+
+def validated_student(form,c):
+    sid=form.get('id','').strip();name=form.get('name','').strip();phone=form.get('phone','').strip();cls=form.get('class_name','').strip()
+    consent=1 if form.get('consent') in ('on','1') else 0
+    if not sid or len(sid)>32 or not name or len(name)>100:raise ValueError('Enter a device ID (up to 32 characters) and student name (up to 100).')
+    if phone.startswith('256') and len(phone)==12:phone='+'+phone
+    if phone and (not phone.startswith('+256') or len(phone)!=13 or not phone[1:].isdigit()):raise ValueError('Use a Uganda guardian number such as +2567XXXXXXXX.')
+    if consent and not phone:raise ValueError('Enter a guardian phone number before enabling SMS consent.')
+    found=c.execute('SELECT name FROM classes WHERE name=? COLLATE NOCASE',(cls,)).fetchone()
+    if not found:raise ValueError('Choose a defined class. Add it under Manage classes if needed.')
+    return sid,name,found['name'],phone,consent
+
+def save_student(c,values,updating=False):
+    sid=values[0]
+    old=c.execute('SELECT * FROM students WHERE id=?',(sid,)).fetchone()
+    if old and not updating:raise ValueError('This device ID already exists. Use its Edit button.')
+    if updating and not old:raise ValueError('Student no longer exists. Refresh the page.')
+    if old:
+        c.execute('UPDATE students SET name=?,class_name=?,phone=?,consent=? WHERE id=?',(*values[1:],sid))
+        if old['phone']!=values[3] or old['name']!=values[1] or not values[4]:
+            c.execute("UPDATE messages SET status='CANCELLED',detail='Student information/consent changed; create a new scan.' WHERE status IN ('QUEUED','DRY_RUN') AND event_id IN (SELECT id FROM events WHERE student_id=?)",(sid,))
+    else:c.execute('INSERT INTO students VALUES(?,?,?,?,?)',values)
+    c.execute('INSERT INTO student_changes(student_id,changed_at,action) VALUES(?,?,?)',(sid,now().isoformat(),'updated' if old else 'created'))
 
 @app.post('/students')
 def student():
-    sid=request.form['id'].strip(); name=request.form['name'].strip(); phone=request.form['phone'].strip()
-    if not sid or not name or (phone and (not phone.startswith('+') or not phone[1:].isdigit())):
-        flash('Provide an ID, name and international phone such as +256...'); return redirect('/')
-    with db() as c: c.execute('INSERT OR REPLACE INTO students VALUES(?,?,?,?,?)',(sid,name,request.form.get('class_name',''),phone,int(request.form.get('consent')=='on')))
-    flash('Student saved. Device ID must match exactly, including leading zeros.')
-    return redirect('/')
+    try:
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            values=validated_student(request.form,c)
+            updating=request.form.get('operation')=='edit'
+            if updating:
+                old=c.execute('SELECT * FROM students WHERE id=?',(values[0],)).fetchone()
+                if not old or request.form.get('record_token')!=record_token(old):raise ValueError('Student changed since this form was opened. Refresh and edit again.')
+            save_student(c,values,updating)
+        flash('Student updated.' if updating else 'Student added. Enrol the identical user ID on the K40.')
+    except ValueError as e:flash(str(e))
+    return redirect(url_for('index')+'#student-register')
+
+@app.post('/classes')
+def manage_classes():
+    try:
+        name=request.form.get('name','').strip();old=request.form.get('old_name','').strip()
+        action=request.form.get('action','add')
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            if action=='remove':
+                if c.execute('SELECT 1 FROM students WHERE class_name=?',(old,)).fetchone():raise ValueError('Class is in use. Reassign its students before removing it.')
+                c.execute('DELETE FROM classes WHERE name=?',(old,))
+            else:
+                if not name or len(name)>40:raise ValueError('Enter a class name of 1–40 characters.')
+                if action=='rename':
+                    if not c.execute('SELECT 1 FROM classes WHERE name=?',(old,)).fetchone():raise ValueError('Class not found.')
+                    c.execute('UPDATE classes SET name=? WHERE name=?',(name,old))
+                    c.execute('UPDATE students SET class_name=? WHERE class_name=?',(name,old))
+                else:c.execute('INSERT INTO classes VALUES(?)',(name,))
+        flash('Class list updated.')
+    except sqlite3.IntegrityError:flash('That class name already exists.')
+    except ValueError as e:flash(str(e))
+    return redirect(url_for('index')+'#student-register')
 
 @app.post('/import')
 def import_students():
     try:
         rows=list(csv.DictReader(io.StringIO(request.files['file'].read().decode('utf-8-sig'))))
-        clean=[]
-        for r in rows:
-            sid=r['id'].strip(); name=r['name'].strip(); phone=r['phone'].strip()
-            if not sid or not name or (phone and (not phone.startswith('+') or not phone[1:].isdigit())): raise ValueError('Invalid row')
-            clean.append((sid,name,r.get('class_name',''),phone,int(r.get('consent','0')=='1')))
-        with db() as c: c.executemany('INSERT OR REPLACE INTO students VALUES(?,?,?,?,?)',clean)
-        flash(f'Imported {len(clean)} students')
-    except Exception: flash('Import rejected. Required columns: id,name,class_name,phone,consent; use consent 1 or 0.')
-    return redirect('/')
+        if not rows:raise ValueError('CSV has no student rows.')
+        with db() as c:
+            c.execute('BEGIN IMMEDIATE');seen=set()
+            for number,r in enumerate(rows,2):
+                if not {'id','name','class_name','phone','consent'}<=r.keys():raise ValueError('Required CSV columns: id,name,class_name,phone,consent.')
+                if r['consent'] not in ('0','1'):raise ValueError(f'Row {number}: consent must be 0 or 1.')
+                v=validated_student(r,c)
+                if v[0] in seen:raise ValueError(f'Row {number}: duplicate device ID in CSV.')
+                seen.add(v[0]);exists=c.execute('SELECT 1 FROM students WHERE id=?',(v[0],)).fetchone()
+                if exists and request.form.get('update_existing')!='on':raise ValueError(f'Row {number}: ID already exists. Tick update existing records if intended.')
+                save_student(c,v,bool(exists))
+        flash(f'Imported {len(rows)} students successfully.')
+    except (ValueError,KeyError,UnicodeDecodeError) as e:flash('Import cancelled; no rows changed. '+str(e))
+    return redirect(url_for('index')+'#student-register')
 
 @app.post('/demo')
 def demo():
