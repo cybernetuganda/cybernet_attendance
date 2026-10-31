@@ -21,8 +21,9 @@ class UiTests(unittest.TestCase):
  def test_real_counts_and_today_filter(self):
   with a.db() as c:c.execute("INSERT INTO students VALUES('1','Student One','P5','+256700000000',1)")
   a.ingest('1',a.now(),0,'DEMO');a.ingest('1',a.now(),1,'DEMO')
-  dashboard=self.client.get('/').data.decode();self.assertIn('Recorded check-ins today',dashboard);self.assertIn('Student One',dashboard)
-  self.assertIn('<strong>1</strong><small>Distinct mapped students',dashboard)
+  dashboard=self.client.get('/').data.decode();self.assertIn('Recorded scans today',dashboard);self.assertIn('Student One',dashboard)
+  self.assertIn('<strong>1</strong><span>IN</span>',dashboard)
+  self.assertIn('<strong>1</strong><span>OUT</span>',dashboard)
   attendance=self.client.get('/attendance').data.decode();self.assertIn('Student One',attendance);self.assertIn('IN',attendance)
   guardians=self.client.get('/guardians').data.decode();self.assertIn('+256700000000',guardians);self.assertIn('Student One',guardians)
  def test_direction_tabs_preserve_filters(self):

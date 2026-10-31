@@ -1,5 +1,6 @@
 """Independently authored Cybernet pilot; original upstream scripts remain untouched."""
 import csv, hashlib, io, os, sqlite3, threading, time
+from ipaddress import IPv4Address
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,15 +15,57 @@ app.secret_key = os.getenv('APP_SECRET') or os.urandom(32)
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024
 DB = Path(os.getenv('DATABASE_PATH', str(ROOT / 'pilot.sqlite3')))
 TZ = ZoneInfo('Africa/Kampala')
-MODE = os.getenv('APP_MODE', 'demo')
+MODE = os.getenv('APP_MODE', 'device').strip().lower()
 DIRECTION = os.getenv('DEVICE_DIRECTION', 'PUNCH').upper()
-state = {'device': 'Not tested', 'worker': 'Stopped', 'last_poll': None}
+state = {'device': 'Not tested', 'worker': 'Stopped', 'last_poll': None, 'last_error': None}
 worker_lock = threading.Lock()
+poll_lock = threading.Lock()
+retry_event = threading.Event()
+worker_thread = None
 sms_lock = threading.Lock()
 auto_sms = False
 sms_thread = None
 
 def now(): return datetime.now(TZ).replace(tzinfo=None)
+
+def school_name():
+    configured = os.getenv('SCHOOL_NAME','').strip()
+    return configured or ('Cybernet Demo School' if MODE == 'demo' else 'Institution not configured')
+
+def device_settings():
+    address=os.getenv('DEVICE_IP','').strip()
+    try: IPv4Address(address)
+    except ValueError: raise ValueError('Set DEVICE_IP to the real K40 IPv4 address in the local .env and restart.')
+    try:
+        port=int(os.getenv('DEVICE_PORT','4370'))
+        key=int(os.getenv('DEVICE_COMM_KEY','0'))
+        interval=int(os.getenv('POLL_SECONDS','10'))
+    except ValueError: raise ValueError('DEVICE_PORT, DEVICE_COMM_KEY and POLL_SECONDS must be whole numbers.')
+    if not 1<=port<=65535: raise ValueError('DEVICE_PORT must be between 1 and 65535.')
+    if key<0: raise ValueError('DEVICE_COMM_KEY must not be negative.')
+    if not 5<=interval<=300: raise ValueError('POLL_SECONDS must be between 5 and 300.')
+    direction=os.getenv('DEVICE_DIRECTION','PUNCH').strip().upper()
+    if direction not in ('PUNCH','IN','OUT'): raise ValueError('DEVICE_DIRECTION must be PUNCH, IN or OUT.')
+    udp=os.getenv('DEVICE_FORCE_UDP','false').strip().lower()
+    if udp not in ('true','false'): raise ValueError('DEVICE_FORCE_UDP must be true or false.')
+    return dict(address=address,port=port,key=key,interval=interval,udp=udp=='true')
+
+def device_config_error():
+    if MODE not in ('device','demo'): return 'APP_MODE must be device or demo in the local .env.'
+    if MODE!='device': return ''
+    if not os.getenv('SCHOOL_NAME','').strip() or os.getenv('SCHOOL_NAME','').strip()=='Cybernet Demo School':
+        return 'Set SCHOOL_NAME to the real institution name in the local .env and restart.'
+    try: device_settings()
+    except ValueError as error: return str(error)
+    return ''
+
+def sms_config_error():
+    from sms_provider import prepare
+    try:
+        prepare('+256700000000',f'{school_name()}: Test Student recorded IN at 08:00 on 31 Oct 2026.')
+    except ValueError as error: return str(error)
+    return ''
+
 @contextmanager
 def db():
     c = sqlite3.connect(DB, timeout=15)
@@ -71,38 +114,70 @@ def ingest(student_id, stamp, punch, source='K40', historical=False):
             reason = 'Repeat scan suppressed (60 seconds)'
         c.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?)',(key,student_id,name,direction,stamp.isoformat(),source,reason))
         if reason == 'Eligible':
-            body = f"{os.getenv('SCHOOL_NAME','Cybernet Demo School')}: {name} recorded {direction} at {stamp:%H:%M} on {stamp:%d %b %Y}."
+            body = f"{school_name()}: {name} recorded {direction} at {stamp:%H:%M} on {stamp:%d %b %Y}."
             status = 'SIMULATED' if source == 'DEMO' else ('QUEUED' if auto_sms and MODE == 'device' else 'DRY_RUN')
             c.execute('INSERT INTO messages(event_id,phone,body,status) VALUES(?,?,?,?)',(key,s['phone'],body,status))
     return True
 
 def connect():
     from zk import ZK
-    return ZK(os.getenv('DEVICE_IP','192.168.1.201'), port=int(os.getenv('DEVICE_PORT','4370')), timeout=8,
-              password=int(os.getenv('DEVICE_COMM_KEY','0')), force_udp=os.getenv('DEVICE_FORCE_UDP','false').lower()=='true', ommit_ping=True).connect()
+    settings=device_settings()
+    return ZK(settings['address'], port=settings['port'], timeout=8,
+              password=settings['key'], force_udp=settings['udp'], ommit_ping=True).connect()
 
 def poll_once():
-    connection = None
-    try:
-        connection = connect()
-        logs = connection.get_attendance()  # Never disable or clear the terminal.
-        with db() as c:
-            baseline = c.execute("SELECT value FROM meta WHERE key='baseline'").fetchone()
-        for log in sorted(logs or [], key=lambda l:l.timestamp):
-            ingest(log.user_id,log.timestamp,log.punch,historical=not baseline)
-        if not baseline:
-            with db() as c: c.execute("INSERT OR REPLACE INTO meta VALUES('baseline',?)",(now().isoformat(),))
-        state['device'] = f'Connected: {len(logs or [])} records read at {now():%H:%M:%S}'
-        state['last_poll'] = now().isoformat()
-    finally:
-        if connection: connection.disconnect()
+    with poll_lock:
+        connection = None
+        try:
+            connection = connect()
+            logs = connection.get_attendance()  # Never disable or clear the terminal.
+            with db() as c:
+                baseline = c.execute("SELECT value FROM meta WHERE key='baseline'").fetchone()
+            for log in sorted(logs or [], key=lambda l:l.timestamp):
+                ingest(log.user_id,log.timestamp,log.punch,historical=not baseline)
+            if not baseline:
+                with db() as c: c.execute("INSERT OR REPLACE INTO meta VALUES('baseline',?)",(now().isoformat(),))
+            state['device'] = f'Connected: {len(logs or [])} records read at {now():%H:%M:%S}'
+            state['last_poll'] = now().isoformat()
+            state['last_error'] = None
+        finally:
+            if connection: connection.disconnect()
+
+def poll_cycle():
+    try: poll_once()
+    except Exception as error:
+        state['last_error']=f'{type(error).__name__}: {error}'
+        state['device']=f'Connection failed: {state["last_error"]}'
 
 def worker():
     state['worker'] = 'Running'
-    while True:
-        try: poll_once()
-        except Exception as e: state['device'] = f'Connection failed: {type(e).__name__}: {e}'
-        time.sleep(max(5,int(os.getenv('POLL_SECONDS','10'))))
+    try:
+        interval=device_settings()['interval']
+        while True:
+            retry_event.clear()
+            poll_cycle()
+            retry_event.wait(timeout=interval)
+    finally:
+        state['worker']='Stopped'
+
+def start_collector():
+    global worker_thread
+    if MODE!='device': return False
+    error=device_config_error()
+    if error:
+        state['worker']='Configuration required'
+        state['device']='Configuration required: '+error
+        return False
+    with worker_lock:
+        if worker_thread is not None and worker_thread.is_alive():
+            retry_event.set()
+            return True
+        retry_event.clear()
+        state['worker']='Starting'
+        state['device']='Connecting to K40...'
+        worker_thread=threading.Thread(target=worker,daemon=True,name='k40-poller')
+        worker_thread.start()
+    return True
 
 @app.before_request
 def protect():
@@ -179,13 +254,20 @@ def page_context(page):
             att_args.setlist('att_from',[today]);att_args.setlist('att_to',[today])
         recent=c.execute("SELECT e.*,s.class_name,COALESCE(m.status,'NO_MESSAGE') AS sms_status FROM events e LEFT JOIN students s ON s.id=e.student_id LEFT JOIN messages m ON m.event_id=e.id ORDER BY e.stamp DESC,e.id DESC LIMIT 6").fetchall()
         checkins=c.execute("SELECT COUNT(DISTINCT e.student_id) FROM events e JOIN students s ON s.id=e.student_id WHERE substr(e.stamp,1,10)=? AND e.direction='IN'",(today,)).fetchone()[0]
+        checkouts=c.execute("SELECT COUNT(DISTINCT e.student_id) FROM events e JOIN students s ON s.id=e.student_id WHERE substr(e.stamp,1,10)=? AND e.direction='OUT'",(today,)).fetchone()[0]
         k40_scans=c.execute("SELECT COUNT(*) FROM events WHERE substr(stamp,1,10)=? AND source='K40'",(today,)).fetchone()[0]
+        baseline_ready=bool(c.execute("SELECT 1 FROM meta WHERE key='baseline'").fetchone())
+        config_error=device_config_error()
         if MODE!='device':terminal_label,terminal_color='Not connected','gray'
+        elif config_error:terminal_label,terminal_color='Configuration required','amber'
+        elif state['last_error']:terminal_label,terminal_color='Connection failed','red'
         elif state['device'].lower().startswith('connection failed'):terminal_label,terminal_color='Connection failed','red'
         elif state['device'].startswith('Connected:'):terminal_label,terminal_color='Connected','green'
         elif state['device'].startswith('Connection test succeeded'):terminal_label,terminal_color='Connection verified','green'
-        else:terminal_label,terminal_color='Not tested','gray'
-        context=dict(page=page,mode=MODE,state=state,terminal_label=terminal_label,terminal_color=terminal_color,school_name=os.getenv('SCHOOL_NAME','Cybernet Demo School'),today=now(),student_count=len(all_students),checkins=checkins,k40_scans=k40_scans,recent=recent,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
+        else:terminal_label,terminal_color='Connecting','gray'
+        provider_error=sms_config_error() if MODE=='device' else ''
+        sms_ready=MODE=='device' and not config_error and baseline_ready and bool(state['last_poll']) and not state['last_error'] and not provider_error
+        context=dict(page=page,mode=MODE,state=state,terminal_label=terminal_label,terminal_color=terminal_color,config_error=config_error,provider_error=provider_error,baseline_ready=baseline_ready,sms_ready=sms_ready,school_name=school_name(),today=now(),student_count=len(all_students),checkins=checkins,checkouts=checkouts,k40_scans=k40_scans,recent=recent,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
         if page=='attendance':context.update(attendance_view(c,att_args))
         return context
 
@@ -307,14 +389,18 @@ def demo():
 @app.post('/test')
 def test():
     if MODE != 'device': flash('Set APP_MODE=device in .env and restart first.'); return redirect('/terminals')
+    error=device_config_error()
+    if error: flash(error); return redirect('/terminals')
     try:
-        conn=connect()
-        try:
-            firmware=conn.get_firmware_version()
-            state['device']=f'Connection test succeeded. Firmware: {firmware}'
-            flash(f'K40 connection succeeded. Firmware: {firmware}')
-        finally: conn.disconnect()
+        with poll_lock:
+            conn=connect()
+            try:
+                firmware=conn.get_firmware_version()
+                state['device']=f'Connection test succeeded. Firmware: {firmware}'
+                flash(f'K40 connection succeeded. Firmware: {firmware}')
+            finally: conn.disconnect()
     except Exception as e:
+        state['last_error']=f'{type(e).__name__}: {e}'
         state['device']=f'Connection failed: {type(e).__name__}: {e}'
         flash(state['device'])
     return redirect('/terminals')
@@ -322,10 +408,8 @@ def test():
 @app.post('/start')
 def start():
     if MODE != 'device': flash('Set APP_MODE=device and restart first.'); return redirect('/terminals')
-    with worker_lock:
-        if state['worker'] != 'Running':
-            state['worker']='Running'
-            threading.Thread(target=worker,daemon=True).start()
+    if start_collector(): flash('K40 polling is running. An immediate retry was requested.')
+    else: flash(device_config_error())
     return redirect('/terminals')
 
 def dispatch_once():
@@ -368,13 +452,19 @@ def sms_control():
     with sms_lock:
         if enable:
             if request.form.get('ack')!='on': flash('Tick the live SMS acknowledgement first.');return redirect('/settings#sms-control')
+            if device_config_error(): flash(device_config_error());return redirect('/settings#sms-control')
+            with db() as c:baseline_ready=bool(c.execute("SELECT 1 FROM meta WHERE key='baseline'").fetchone())
+            if not baseline_ready or not state['last_poll'] or state['last_error']:
+                flash('Wait for a successful K40 poll and historical baseline before enabling SMS.');return redirect('/settings#sms-control')
+            provider_error=sms_config_error()
+            if provider_error:flash(provider_error);return redirect('/settings#sms-control')
             auto_sms=True
             if sms_thread is None or not sms_thread.is_alive():
                 sms_thread=threading.Thread(target=sms_worker,daemon=True);sms_thread.start()
         else:
             auto_sms=False
             with db() as c:c.execute("UPDATE messages SET status='CANCELLED',detail='Cancelled when automatic sending was paused.' WHERE status='QUEUED'")
-    flash('Automatic SMS ON for new eligible scans. Start polling if stopped.' if enable else 'Automatic SMS OFF. Pending queue cancelled; a submission already in progress may complete.')
+    flash('Automatic SMS ON for new eligible scans.' if enable else 'Automatic SMS OFF. Pending queue cancelled; a submission already in progress may complete.')
     return redirect('/settings#sms-control')
 
 @app.get('/export')
@@ -391,4 +481,5 @@ def export():
 init()
 if __name__=='__main__':
     recover_dispatch()
+    start_collector()
     app.run(host='127.0.0.1',port=5000,debug=False)
