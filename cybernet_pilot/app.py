@@ -407,10 +407,11 @@ def test():
 
 @app.post('/start')
 def start():
-    if MODE != 'device': flash('Set APP_MODE=device and restart first.'); return redirect('/terminals')
-    if start_collector(): flash('K40 polling is running. An immediate retry was requested.')
+    target = '/settings#device-polling' if request.form.get('return_to') == 'settings' else '/terminals'
+    if MODE != 'device': flash('Set APP_MODE=device and restart first.'); return redirect(target)
+    if start_collector(): flash('Poll requested. The K40 status will update after the read completes.')
     else: flash(device_config_error())
-    return redirect('/terminals')
+    return redirect(target)
 
 def dispatch_once():
     from sms_provider import prepare, submit
