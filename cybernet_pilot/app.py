@@ -1,9 +1,11 @@
 """Independently authored Cybernet pilot; original upstream scripts remain untouched."""
 import csv, hashlib, io, os, sqlite3, threading, time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from flask import Flask, render_template, request, redirect, url_for, flash, Response
+from werkzeug.datastructures import MultiDict
 from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
@@ -14,17 +16,22 @@ DB = Path(os.getenv('DATABASE_PATH', str(ROOT / 'pilot.sqlite3')))
 TZ = ZoneInfo('Africa/Kampala')
 MODE = os.getenv('APP_MODE', 'demo')
 DIRECTION = os.getenv('DEVICE_DIRECTION', 'PUNCH').upper()
-state = {'device': 'Not tested', 'worker': 'Stopped'}
+state = {'device': 'Not tested', 'worker': 'Stopped', 'last_poll': None}
 worker_lock = threading.Lock()
 sms_lock = threading.Lock()
 auto_sms = False
 sms_thread = None
 
 def now(): return datetime.now(TZ).replace(tzinfo=None)
+@contextmanager
 def db():
     c = sqlite3.connect(DB, timeout=15)
     c.row_factory = sqlite3.Row
-    return c
+    try:
+        with c:
+            yield c
+    finally:
+        c.close()
 
 def init():
     with db() as c:
@@ -86,6 +93,7 @@ def poll_once():
         if not baseline:
             with db() as c: c.execute("INSERT OR REPLACE INTO meta VALUES('baseline',?)",(now().isoformat(),))
         state['device'] = f'Connected: {len(logs or [])} records read at {now():%H:%M:%S}'
+        state['last_poll'] = now().isoformat()
     finally:
         if connection: connection.disconnect()
 
@@ -144,14 +152,20 @@ def attendance_view(c,args):
     order='ASC' if args.get('att_order')=='oldest' else 'DESC'
     rows=c.execute("SELECT e.*,s.class_name,COALESCE(m.status,'NO_MESSAGE') AS sms_status"+base+f' ORDER BY e.stamp {order},e.id {order} LIMIT ? OFFSET ?',params+[size,(page-1)*size]).fetchall()
     def link(p):
-        values=args.to_dict();values['att_page']=p;return '/?'+urlencode(values)+'#attendance'
+        values=args.to_dict();values['att_page']=p;return '/attendance?'+urlencode(values)
+    tabs=[]
+    for value,label in [('', 'All'),('IN','IN'),('OUT','OUT'),('UNKNOWN','Unknown')]:
+        values=args.to_dict();values.pop('att_page',None)
+        if value:values['att_direction']=value
+        else:values.pop('att_direction',None)
+        tabs.append((value,label,'/attendance?'+urlencode(values)))
     export_args={k:v for k,v in args.items() if k.startswith('att_')}
-    return dict(att_rows=rows,att_total=total,att_page=page,att_pages=pages,att_size=size,att_error=error,att_prev=link(page-1),att_next=link(page+1),att_export='/export?'+urlencode(export_args),att=args)
+    return dict(att_rows=rows,att_total=total,att_page=page,att_pages=pages,att_size=size,att_error=error,att_prev=link(page-1),att_next=link(page+1),att_export='/export?'+urlencode(export_args),att_tabs=tabs,att=args)
 
-@app.route('/')
-def index():
+def page_context(page):
     from flask import session
     session.setdefault('csrf',os.urandom(24).hex())
+    today=now().date().isoformat()
     q=request.args.get('student_q','').strip()
     class_filter=request.args.get('student_class','').strip()
     consent_filter=request.args.get('student_consent','')
@@ -160,7 +174,47 @@ def index():
         students=[r for r in all_students if (not q or q.casefold() in ' '.join(str(r[k] or '') for k in ['id','name','phone']).casefold()) and (not class_filter or r['class_name']==class_filter) and (consent_filter not in ('0','1') or r['consent']==int(consent_filter))]
         edit_student=c.execute('SELECT * FROM students WHERE id=?',(request.args.get('edit',''),)).fetchone()
         token=record_token(edit_student) if edit_student else ''
-        return render_template('index.html',mode=MODE,state=state,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,events=c.execute('SELECT * FROM events ORDER BY stamp DESC LIMIT 100').fetchall(),messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'],**attendance_view(c,request.args))
+        att_args=MultiDict(request.args)
+        if page=='attendance' and att_args.get('att_range')!='all' and not att_args.get('att_from') and not att_args.get('att_to'):
+            att_args.setlist('att_from',[today]);att_args.setlist('att_to',[today])
+        recent=c.execute("SELECT e.*,s.class_name,COALESCE(m.status,'NO_MESSAGE') AS sms_status FROM events e LEFT JOIN students s ON s.id=e.student_id LEFT JOIN messages m ON m.event_id=e.id ORDER BY e.stamp DESC,e.id DESC LIMIT 6").fetchall()
+        checkins=c.execute("SELECT COUNT(DISTINCT e.student_id) FROM events e JOIN students s ON s.id=e.student_id WHERE substr(e.stamp,1,10)=? AND e.direction='IN'",(today,)).fetchone()[0]
+        k40_scans=c.execute("SELECT COUNT(*) FROM events WHERE substr(stamp,1,10)=? AND source='K40'",(today,)).fetchone()[0]
+        if MODE!='device':terminal_label,terminal_color='Not connected','gray'
+        elif state['device'].lower().startswith('connection failed'):terminal_label,terminal_color='Connection failed','red'
+        elif state['device'].startswith('Connected:'):terminal_label,terminal_color='Connected','green'
+        elif state['device'].startswith('Connection test succeeded'):terminal_label,terminal_color='Connection verified','green'
+        else:terminal_label,terminal_color='Not tested','gray'
+        context=dict(page=page,mode=MODE,state=state,terminal_label=terminal_label,terminal_color=terminal_color,school_name=os.getenv('SCHOOL_NAME','Cybernet Demo School'),today=now(),student_count=len(all_students),checkins=checkins,k40_scans=k40_scans,recent=recent,students=students,all_students=all_students,classes=c.execute('SELECT name FROM classes ORDER BY name COLLATE NOCASE').fetchall(),edit_student=edit_student,record_token=token,student_q=q,student_class=class_filter,student_consent=consent_filter,messages=c.execute('SELECT * FROM messages ORDER BY id DESC LIMIT 100').fetchall(),auto_sms=auto_sms,counts=dict(c.execute('SELECT status,COUNT(*) FROM messages GROUP BY status').fetchall()),csrf=session['csrf'])
+        if page=='attendance':context.update(attendance_view(c,att_args))
+        return context
+
+def render_page(page):
+    return render_template(page+'.html',**page_context(page))
+
+@app.get('/')
+def index():
+    from urllib.parse import urlencode
+    if 'edit' in request.args or any(k.startswith('student_') for k in request.args):
+        return redirect('/students?'+urlencode(request.args))
+    if any(k.startswith('att_') for k in request.args):
+        return redirect('/attendance?'+urlencode(request.args))
+    return render_page('dashboard')
+
+@app.get('/attendance')
+def attendance_page(): return render_page('attendance')
+
+@app.get('/students')
+def students_page(): return render_page('students')
+
+@app.get('/guardians')
+def guardians_page(): return render_page('guardians')
+
+@app.get('/terminals')
+def terminals_page(): return render_page('terminals')
+
+@app.get('/settings')
+def settings_page(): return render_page('settings')
 
 def record_token(row):
     return hashlib.sha256(repr(tuple(row)).encode()).hexdigest()
@@ -201,7 +255,7 @@ def student():
             save_student(c,values,updating)
         flash('Student updated.' if updating else 'Student added. Enrol the identical user ID on the K40.')
     except ValueError as e:flash(str(e))
-    return redirect(url_for('index')+'#student-register')
+    return redirect(url_for('students_page')+'#student-register')
 
 @app.post('/classes')
 def manage_classes():
@@ -223,7 +277,7 @@ def manage_classes():
         flash('Class list updated.')
     except sqlite3.IntegrityError:flash('That class name already exists.')
     except ValueError as e:flash(str(e))
-    return redirect(url_for('index')+'#student-register')
+    return redirect(url_for('students_page')+'#manage-classes')
 
 @app.post('/import')
 def import_students():
@@ -242,32 +296,37 @@ def import_students():
                 save_student(c,v,bool(exists))
         flash(f'Imported {len(rows)} students successfully.')
     except (ValueError,KeyError,UnicodeDecodeError) as e:flash('Import cancelled; no rows changed. '+str(e))
-    return redirect(url_for('index')+'#student-register')
+    return redirect(url_for('students_page')+'#student-import')
 
 @app.post('/demo')
 def demo():
     if MODE != 'demo': return 'Demo disabled',403
     ingest(request.form['id'],now(),0 if request.form['direction']=='IN' else 1,'DEMO')
-    return redirect('/')
+    return redirect('/attendance')
 
 @app.post('/test')
 def test():
-    if MODE != 'device': flash('Set APP_MODE=device in .env and restart first.'); return redirect('/')
+    if MODE != 'device': flash('Set APP_MODE=device in .env and restart first.'); return redirect('/terminals')
     try:
         conn=connect()
-        try: flash(f'K40 connection succeeded. Firmware: {conn.get_firmware_version()}')
+        try:
+            firmware=conn.get_firmware_version()
+            state['device']=f'Connection test succeeded. Firmware: {firmware}'
+            flash(f'K40 connection succeeded. Firmware: {firmware}')
         finally: conn.disconnect()
-    except Exception as e: flash(f'Connection failed: {type(e).__name__}: {e}')
-    return redirect('/')
+    except Exception as e:
+        state['device']=f'Connection failed: {type(e).__name__}: {e}'
+        flash(state['device'])
+    return redirect('/terminals')
 
 @app.post('/start')
 def start():
-    if MODE != 'device': flash('Set APP_MODE=device and restart first.'); return redirect('/')
+    if MODE != 'device': flash('Set APP_MODE=device and restart first.'); return redirect('/terminals')
     with worker_lock:
         if state['worker'] != 'Running':
             state['worker']='Running'
             threading.Thread(target=worker,daemon=True).start()
-    return redirect('/')
+    return redirect('/terminals')
 
 def dispatch_once():
     from sms_provider import prepare, submit
@@ -304,11 +363,11 @@ def sms_worker():
 @app.post('/sms-control')
 def sms_control():
     global auto_sms,sms_thread
-    if MODE!='device': flash('Automatic sending is available only in device mode.');return redirect('/')
+    if MODE!='device': flash('Automatic sending is available only in device mode.');return redirect('/settings#sms-control')
     enable=request.form.get('action')=='enable'
     with sms_lock:
         if enable:
-            if request.form.get('ack')!='on': flash('Tick the live SMS acknowledgement first.');return redirect('/')
+            if request.form.get('ack')!='on': flash('Tick the live SMS acknowledgement first.');return redirect('/settings#sms-control')
             auto_sms=True
             if sms_thread is None or not sms_thread.is_alive():
                 sms_thread=threading.Thread(target=sms_worker,daemon=True);sms_thread.start()
@@ -316,7 +375,7 @@ def sms_control():
             auto_sms=False
             with db() as c:c.execute("UPDATE messages SET status='CANCELLED',detail='Cancelled when automatic sending was paused.' WHERE status='QUEUED'")
     flash('Automatic SMS ON for new eligible scans. Start polling if stopped.' if enable else 'Automatic SMS OFF. Pending queue cancelled; a submission already in progress may complete.')
-    return redirect('/')
+    return redirect('/settings#sms-control')
 
 @app.get('/export')
 def export():

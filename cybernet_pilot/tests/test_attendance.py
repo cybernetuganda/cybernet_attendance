@@ -24,7 +24,7 @@ class AttendanceTests(unittest.TestCase):
   r=self.client.get('/export?att_status=NO_MESSAGE');self.assertEqual(len(list(csv.reader(io.StringIO(r.data.decode())))),34)
  def test_invalid_dates(self):
   self.assertEqual(self.client.get('/export?att_from=bad').status_code,400)
-  r=self.client.get('/?att_from=2026-12-01&att_to=2026-01-01');self.assertEqual(r.status_code,200);self.assertIn(b'From date must not',r.data)
+  r=self.client.get('/attendance?att_from=2026-12-01&att_to=2026-01-01');self.assertEqual(r.status_code,200);self.assertIn(b'From date must not',r.data)
  def test_live_controls_outside_replaceable_panel(self):
-  r=self.client.get('/');self.assertEqual(r.status_code,200)
+  r=self.client.get('/attendance');self.assertEqual(r.status_code,200)
   text=r.data.decode();self.assertLess(text.index('id="attendance-filters"'),text.index('id="live-attendance"'));self.assertNotIn('location.reload',text)

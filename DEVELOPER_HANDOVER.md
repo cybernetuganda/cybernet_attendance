@@ -1,6 +1,6 @@
 # Cybernet Attendance Developer Handover
 
-Updated 29 October 2026. Owner: Cybernet Computer and Security (U) Ltd. Current stage: Phases 1–3 implemented as a local single-device pilot for school or church Sunday School attendance and guardian SMS.
+Updated 31 October 2026. Owner: Cybernet Computer and Security (U) Ltd. Current stage: Phases 1–3 plus a six-screen UI redesign implemented as a local single-device pilot for school or church Sunday School attendance and guardian SMS.
 
 ## Start here
 Work in **cybernet_pilot/**. Root-level README.md, Device_Templates/ and Management_Scripts/ belong to the original upstream project and describe its older Access/MySQL design. They are retained for reference; do not launch them for the Cybernet pilot.
@@ -34,7 +34,7 @@ Open http://127.0.0.1:5000 . Python 3.11/3.12 recommended. Alternatively run sta
 | SMS | Pandora HTTPS POST adapter; optional Africa's Talking adapter; manually reviewed dispatch and automatic sending |
 | Automatic mode | Enable/Pause acknowledgement; persistent queue; separate dispatch thread; counters; OFF after restart |
 | Reliability | Persistent exact-event deduplication, 60-second same-direction repeat suppression, baseline/history handling, uncertain submissions never auto-retried |
-| Dashboard | Live-only panel updates every 10 seconds; student forms remain untouched; attendance filters/paging update in place |
+| UI | Dashboard, Attendance, Students, Guardians, Terminals and Settings pages; live data panels update every 10 seconds without replacing open forms |
 | Access | Localhost bind, optional dashboard password, POST CSRF checks, upload size limit |
 | Change history | Local student create/update action timestamps; no staff identity or audit viewer |
 
@@ -42,11 +42,11 @@ Open http://127.0.0.1:5000 . Python 3.11/3.12 recommended. Alternatively run sta
 | File | Responsibility |
 |---|---|
 | app.py | Flask routes, SQLite schema, validation, device polling, attendance processing, queue dispatch and reporting queries |
-| templates/index.html | Dashboard, forms, filters and live-panel JavaScript |
+| templates/ and static/ | Shared layout, six page templates, responsive CSS and live-panel JavaScript |
 | sms_provider.py | Provider validation, HTTP payloads, response classification and safe diagnostics |
 | send_sms.py | Single DRY_RUN message preview/submission with --confirm-send |
 | .env.example | Configuration template; real .env must stay private |
-| tests/ | 29 automated application and mocked-provider tests |
+| tests/ | 33 automated application, UI and mocked-provider tests |
 | PHASE_3_UPDATE.md | Latest installation/reporting notes; consult earlier phase notes only for background |
 
 SQLite tables: students, classes, events, messages, meta, student_changes. Runtime database defaults to pilot.sqlite3 beside app.py; DATABASE_PATH can override it. Timestamps are treated as Africa/Kampala local time. Historical class snapshots are not stored; class filters use the current student assignment. init() creates/migrates missing tables and imports existing class names.
@@ -64,7 +64,7 @@ QUEUED -> SUBMITTING -> ACCEPTED / REJECTED / UNKNOWN. Local validation produces
 ## Verified status and open issues
 User confirmed real K40 capture and a successful SMS test, then automatic sending. Later MTN API attempts remained UNKNOWN, although the same numbers received messages from Pandora's web portal. Number formatting alone is not established as the cause. The latest adapter reports redirect/HTTP/non-JSON/TLS/timeout/connection diagnostics without exposing passwords. **MTN API delivery remains unresolved; no delivery callback is implemented.** Reconcile UNKNOWN records against the provider portal before resending.
 
-The 29 tests use temporary databases and mocked device/provider responses. Browser visual testing and hardware testing were unavailable in the build environment. Do not treat mocked tests as end-to-end acceptance.
+The 33 tests use temporary databases and mocked device/provider responses. The six UI pages were visually checked at desktop and mobile widths in a browser. Hardware and live gateway testing remain on-site acceptance work. Do not treat mocked tests as end-to-end acceptance. See cybernet_pilot/UI_REDESIGN.md for the screen-to-feature mapping and Pending items.
 
 ```powershell
 .venv\Scripts\python.exe -m unittest discover -s tests -v

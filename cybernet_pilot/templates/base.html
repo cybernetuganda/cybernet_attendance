@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ page|title }} · Cybernet Attendance</title>
+  <link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}">
+</head>
+<body>
+<svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <symbol id="i-fingerprint" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0-9 9m18 0a9 9 0 0 0-9-9M7 6.5A7 7 0 0 1 19 12M5 11a7 7 0 0 1 7-7m-5 9v1.5a8 8 0 0 1-1 4M9 12a3 3 0 0 1 6 0v2.5c0 2.6-.5 4.8-1.4 6.5M12 9a3 3 0 0 0-3 3v3c0 2.5-.4 4.5-1.1 6M17 10.5V14c0 2.5-.3 4.4-.9 6M12 12v3.5c0 2-.2 3.7-.6 5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18m-12 5 2 2 4-4"/></symbol>
+  <symbol id="i-cap" viewBox="0 0 24 24"><path d="m2 9 10-5 10 5-10 5L2 9Zm4 2v5c3 3 9 3 12 0v-5m4-2v8"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 5v1"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19 13 2-1-2-1-.5-2 1-2-2-2-2 1-2-.5-1-2-1 2-2 .5-2-1-2 2 1 2-.5 2-2 1 2 1 .5 2-1 2 2 2 2-1 2 .5 1 2 1-2 2-.5 2 1 2-2-1-2 .5-2Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 8-3 8-3 10h18c0-2-3-2-3-10ZM10 21h4"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+</svg>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="/" aria-label="Cybernet Attendance dashboard"><span class="brand-mark"><svg><use href="#i-fingerprint"/></svg></span><span><strong>Cybernet</strong><small>Attendance</small></span></a>
+    <nav class="side-nav" aria-label="Main navigation">
+      {% for key,label,icon,path in [('dashboard','Dashboard','grid','/'),('attendance','Attendance','calendar','/attendance'),('students','Students','cap','/students'),('guardians','Guardians','users','/guardians'),('terminals','Terminals','fingerprint','/terminals'),('settings','Settings','settings','/settings')] %}
+      <a href="{{path}}" class="nav-link {{'active' if page==key else ''}}" {{'aria-current="page"'|safe if page==key else ''}}><svg><use href="#i-{{icon}}"/></svg><span>{{label}}</span></a>
+      {% endfor %}
+    </nav>
+    <div class="sidebar-footer" title="Configured institution">{{school_name}}</div>
+  </aside>
+  <div class="main-column">
+    <header class="topbar">
+      <div class="topbar-start"><button class="menu-button icon-button" type="button" data-menu aria-label="Toggle navigation" aria-expanded="false"><svg><use href="#i-grid"/></svg></button><h1>{{page|title}}</h1></div>
+      <div class="topbar-actions">
+        <form class="header-search" method="get" action="/students" role="search"><svg><use href="#i-search"/></svg><input type="search" name="student_q" value="{{student_q if page=='students' else ''}}" placeholder="Search students by name, ID or phone" aria-label="Search students by name, ID or phone"></form>
+        <a class="icon-button notification-link" href="/settings#sms-activity" title="Guardian SMS activity" aria-label="Guardian SMS activity"><svg><use href="#i-bell"/></svg></a>
+        <div class="operator"><span class="operator-avatar">LA</span><span class="operator-label"><strong>Local operator</strong><small>{{mode|title}} mode</small></span></div>
+      </div>
+      <form class="mobile-search" method="get" action="/students" role="search"><svg><use href="#i-search"/></svg><input type="search" name="student_q" value="{{student_q if page=='students' else ''}}" placeholder="Search students by name, ID or phone" aria-label="Search students by name, ID or phone"></form>
+    </header>
+    <main class="page-content">
+      {% for message in get_flashed_messages() %}<div class="flash" role="status">{{message}}</div>{% endfor %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<script src="{{ url_for('static',filename='app.js') }}" defer></script>
+</body>
+</html>

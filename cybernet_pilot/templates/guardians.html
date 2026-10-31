@@ -1,0 +1,5 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="content-heading"><div><h2>Guardian contacts</h2><p class="subtle">Each row is the phone and consent recorded for a student. Guardian names are not stored yet.</p></div></div>
+<section class="card table-card"><div class="card-heading"><h3>{{student_count}} student contacts</h3><span class="pill gray">Names Pending</span></div><div class="table-scroll"><table><thead><tr><th>Guardian name</th><th>Phone</th><th>Linked student</th><th>SMS consent</th><th></th></tr></thead><tbody>{% for s in all_students %}<tr><td><span class="pill gray">Pending</span></td><td>{{s.phone or 'Not set'}}</td><td><div class="person-cell"><span class="initials">{{s.name[:2]|upper}}</span><strong>{{s.name}}</strong></div></td><td><span class="{{'status-positive' if s.consent else 'subtle'}}">{{'Given' if s.consent else 'Not given'}}</span></td><td><a href="{{url_for('students_page',edit=s.id)}}#student-register">Edit contact</a></td></tr>{% else %}<tr><td colspan="5" class="empty-cell">No student contacts yet. Add students to begin.</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

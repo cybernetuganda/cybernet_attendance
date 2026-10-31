@@ -33,8 +33,8 @@ class StudentTests(unittest.TestCase):
   with a.db() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM students').fetchone()[0],1)
   self.post('/import',dict(file=(io.BytesIO(text),'test.csv'),update_existing='on'));self.assertEqual(self.row()['name'],'Changed')
  def test_search_and_edit_form(self):
-  self.post('/students',self.student());r=self.c.get('/?edit=001');self.assertEqual(r.status_code,200);self.assertIn(b'Save changes',r.data)
-  r=self.c.get('/?student_q=nomatch');self.assertIn(b'No matching students',r.data)
+  self.post('/students',self.student());r=self.c.get('/students?edit=001');self.assertEqual(r.status_code,200);self.assertIn(b'Save changes',r.data)
+  r=self.c.get('/students?student_q=nomatch');self.assertIn(b'No matching students',r.data)
  def test_edit_cancels_pending(self):
   self.post('/students',self.student());a.ingest('001',a.now(),0)
   old=self.row();d=self.student();d.update(operation='edit',record_token=a.record_token(old),phone='+256711111111');self.post('/students',d)
