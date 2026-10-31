@@ -27,6 +27,8 @@ class LiveModeTests(unittest.TestCase):
   template=(Path(__file__).resolve().parents[1]/'.env.example').read_text()
   self.assertIn('APP_MODE=device',template)
   self.assertIn('\nDEVICE_IP=\n',template)
+  for name in ('SCHOOL_NAME','DEVICE_PORT','DEVICE_COMM_KEY','DEVICE_FORCE_UDP','DEVICE_DIRECTION','POLL_SECONDS','PANDORA_USERNAME','PANDORA_PASSWORD','PANDORA_SENDER','PANDORA_MESSAGE_TYPE','PANDORA_SENDER_FIELD','PANDORA_API_URL'):
+   self.assertIn(f'\n{name}=',template)
  def test_one_worker_and_manual_retry(self):
   with patch.object(a.threading,'Thread') as thread:
    thread.return_value.is_alive.return_value=True
