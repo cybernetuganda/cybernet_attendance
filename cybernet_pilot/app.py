@@ -1,18 +1,23 @@
 """Independently authored Cybernet pilot; original upstream scripts remain untouched."""
-import csv, hashlib, io, os, sqlite3, threading, time
+import csv, getpass, hashlib, hmac, io, os, sqlite3, sys, threading, time
 from ipaddress import IPv4Address
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from flask import Flask, render_template, request, redirect, url_for, flash, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, Response, session, g
 from werkzeug.datastructures import MultiDict
+from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 app = Flask(__name__)
 app.secret_key = os.getenv('APP_SECRET') or os.urandom(32)
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', '').lower() == 'true'
 DB = Path(os.getenv('DATABASE_PATH', str(ROOT / 'pilot.sqlite3')))
 TZ = ZoneInfo('Africa/Kampala')
 MODE = os.getenv('APP_MODE', 'device').strip().lower()
@@ -83,11 +88,15 @@ def init():
         CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,event_id TEXT UNIQUE,phone TEXT,body TEXT,status TEXT,detail TEXT DEFAULT '');
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
         CREATE TABLE IF NOT EXISTS classes(name TEXT PRIMARY KEY COLLATE NOCASE);
-        CREATE TABLE IF NOT EXISTS student_changes(id INTEGER PRIMARY KEY,student_id TEXT,changed_at TEXT,action TEXT);''')
+        CREATE TABLE IF NOT EXISTS student_changes(id INTEGER PRIMARY KEY,student_id TEXT,changed_at TEXT,action TEXT);
+        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE COLLATE NOCASE,password_hash TEXT NOT NULL,created_at TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,auth_version INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS login_attempts(key TEXT PRIMARY KEY,attempts INTEGER NOT NULL,last_attempt REAL NOT NULL,blocked_until REAL NOT NULL DEFAULT 0);''')
         if not c.execute("SELECT 1 FROM meta WHERE key='class_catalog_seeded'").fetchone():
             c.executemany('INSERT OR IGNORE INTO classes(name) VALUES(?)',[(x,) for x in ['Baby','Middle','Top','P1','P2','P3','P4','P5','P6','P7']])
             c.execute("INSERT INTO meta VALUES('class_catalog_seeded','1')")
         c.execute("INSERT OR IGNORE INTO classes(name) SELECT DISTINCT TRIM(class_name) FROM students WHERE class_name IS NOT NULL AND TRIM(class_name)!=''")
+        if 'auth_version' not in [row['name'] for row in c.execute('PRAGMA table_info(users)')]:
+            c.execute('ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1')
 def recover_dispatch():
     with db() as c:
         c.execute("UPDATE messages SET status='UNKNOWN',detail='Application stopped during submission; check provider before resending.' WHERE status='SUBMITTING'")
@@ -181,16 +190,87 @@ def start_collector():
 
 @app.before_request
 def protect():
-    # Local-only bind by default. Optional password is required for any shared use.
-    password = os.getenv('DASHBOARD_PASSWORD')
-    if password:
-        import hmac
-        if not request.authorization or not hmac.compare_digest(request.authorization.password or '',password):
-            return Response('Password required',401,{'WWW-Authenticate':'Basic realm="Cybernet Pilot"'})
+    if request.endpoint == 'static': return
+    g.current_user = None
+    if 'user_id' in session:
+        with db() as c:
+            g.current_user = c.execute('SELECT id,username,auth_version FROM users WHERE id=? AND active=1',(session['user_id'],)).fetchone()
+        if g.current_user is None or session.get('auth_version') != g.current_user['auth_version']:
+            g.current_user = None
+            session.clear()
+    if request.endpoint not in ('login',) and g.current_user is None:
+        if request.method != 'GET': return 'Authentication required',401
+        return redirect(url_for('login',next=request.full_path.rstrip('?')))
+    session.setdefault('csrf',os.urandom(24).hex())
     if request.method == 'POST':
-        import hmac
-        if not hmac.compare_digest(request.form.get('csrf',''),str(__import__('flask').session.get('csrf','missing'))):
+        if not hmac.compare_digest(request.form.get('csrf',''),session['csrf']):
             return 'Invalid form token',403
+
+@app.after_request
+def prevent_private_cache(response):
+    if request.endpoint != 'static': response.headers['Cache-Control'] = 'no-store'
+    return response
+
+def safe_next(value):
+    return value if value.startswith('/') and not value.startswith('//') and '\\' not in value else '/'
+
+def login_key(username):
+    return hashlib.sha256(f'{request.remote_addr or ""}|{username.casefold()}'.encode()).hexdigest()
+
+@app.route('/login',methods=['GET','POST'])
+def login():
+    if g.current_user is not None: return redirect('/')
+    error = ''
+    next_path = safe_next(request.values.get('next','/'))
+    if request.method == 'POST':
+        username = request.form.get('username','').strip()[:80]
+        password = request.form.get('password','')
+        key = login_key(username)
+        with db() as c:
+            c.execute('DELETE FROM login_attempts WHERE last_attempt<?',(time.time()-900,))
+            attempt = c.execute('SELECT attempts,last_attempt,blocked_until FROM login_attempts WHERE key=?',(key,)).fetchone()
+            user = c.execute('SELECT id,password_hash,auth_version FROM users WHERE username=? COLLATE NOCASE AND active=1',(username,)).fetchone()
+            current = time.time()
+            if attempt and attempt['blocked_until'] > current:
+                error = 'Too many attempts. Try again in 15 minutes.'
+            elif user and check_password_hash(user['password_hash'],password):
+                c.execute('DELETE FROM login_attempts WHERE key=?',(key,))
+                session.clear()
+                session['user_id'] = user['id']
+                session['auth_version'] = user['auth_version']
+                session['csrf'] = os.urandom(24).hex()
+                session.permanent = request.form.get('remember') == 'on'
+                return redirect(next_path)
+            else:
+                count = attempt['attempts']+1 if attempt and current-attempt['last_attempt'] < 900 else 1
+                c.execute('INSERT INTO login_attempts(key,attempts,last_attempt,blocked_until) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET attempts=excluded.attempts,last_attempt=excluded.last_attempt,blocked_until=excluded.blocked_until',(key,count,current,current+900 if count>=5 else 0))
+                error = 'Invalid username or password.'
+    with db() as c: account_exists=bool(c.execute('SELECT 1 FROM users LIMIT 1').fetchone())
+    return render_template('login.html',csrf=session['csrf'],error=error,next_path=next_path,school_name=school_name(),account_exists=account_exists,mode=MODE)
+
+@app.post('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+def manage_account(command, username):
+    username = username.strip()
+    if not username or len(username)>80 or not all(ch.isalnum() or ch in '._-' for ch in username):
+        raise ValueError('Username must be 1–80 letters, digits, dots, hyphens, or underscores.')
+    password = getpass.getpass('New password (at least 12 characters): ')
+    confirmation = getpass.getpass('Confirm password: ')
+    if len(password)<12 or password!=confirmation:
+        raise ValueError('Passwords must match and contain at least 12 characters.')
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        existing=c.execute('SELECT id FROM users WHERE username=? COLLATE NOCASE',(username,)).fetchone()
+        if command=='create-admin':
+            if existing: raise ValueError('That account already exists.')
+            c.execute('INSERT INTO users(username,password_hash,created_at) VALUES(?,?,?)',(username,generate_password_hash(password),now().isoformat()))
+        elif command=='reset-password':
+            if not existing: raise ValueError('That account does not exist.')
+            c.execute('UPDATE users SET password_hash=?,auth_version=auth_version+1 WHERE id=?',(generate_password_hash(password),existing['id']))
+    print('Account created.' if command=='create-admin' else 'Password updated.')
 
 def attendance_query(args):
     clauses=[];params=[]
@@ -481,6 +561,12 @@ def export():
 
 init()
 if __name__=='__main__':
-    recover_dispatch()
-    start_collector()
-    app.run(host='127.0.0.1',port=5000,debug=False)
+    if len(sys.argv)>1:
+        if sys.argv[1] not in ('create-admin','reset-password') or len(sys.argv)>3:
+            sys.exit('Usage: python app.py [create-admin|reset-password] [username]')
+        try: manage_account(sys.argv[1],sys.argv[2] if len(sys.argv)==3 else 'admin')
+        except ValueError as error: sys.exit(str(error))
+    else:
+        recover_dispatch()
+        start_collector()
+        app.run(host='127.0.0.1',port=5000,debug=False)

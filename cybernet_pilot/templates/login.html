@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sign in · Cybernet Attendance</title>
+  <link rel="stylesheet" href="{{ url_for('static',filename='login.css') }}">
+</head>
+<body>
+  <main class="login-wrap">
+    <section class="login-card" aria-label="Cybernet Attendance sign in">
+      <div class="showcase">
+        <div class="showcase-brand">
+          <span class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="16"/><path d="m10 18 5 5 11-12"/></svg></span>
+          <span><strong>Cybernet</strong><small>ATTENDANCE PORTAL</small></span>
+        </div>
+        <div class="radar-scene" aria-hidden="true">
+          <div class="radar-ring"><div class="radar-face"><span class="radar-pulse"></span><svg class="radar-icon" viewBox="0 0 120 120"><path d="M60 86V60m-26 26a37 37 0 0 1 52 0M26 72a48 48 0 0 1 68 0M18 58a60 60 0 0 1 84 0"/><circle cx="60" cy="60" r="7"/></svg><span class="radar-hand"></span></div></div>
+          <span class="radar-chip">K40 attendance</span>
+          <span class="radar-status"><i></i>{{ 'Demo mode' if mode == 'demo' else 'Device mode' }}</span>
+        </div>
+        <div class="showcase-foot"><span>Secure operator access</span><span>CYBERNET&nbsp; • &nbsp;K40</span></div>
+      </div>
+      <div class="form-panel">
+        <div class="form-inner">
+          <header class="form-heading"><h1>HELLO!</h1><p>Sign in to your account</p></header>
+          <div class="login-tabs" aria-label="Sign in type"><span class="selected">Admin Login</span><span class="divider" aria-hidden="true"></span><span class="unavailable" title="Self-service accounts are not configured">Self-Service <small>Coming later</small></span></div>
+          {% if not account_exists %}<div class="notice" role="status">No account is configured yet. On this computer, run <code>python app.py create-admin</code> before signing in.</div>{% endif %}
+          {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+          <form method="post" action="{{ url_for('login') }}" class="login-form">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="next" value="{{ next_path }}">
+            <label for="username">Username</label>
+            <input id="username" name="username" type="text" autocomplete="username" maxlength="80" required autofocus placeholder="Enter your username">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="Enter your password">
+            <div class="form-options"><label class="remember"><input type="checkbox" name="remember">Remember me</label><a href="#recovery">Forgot password?</a></div>
+            <button class="login-button" type="submit" {{ 'disabled' if not account_exists else '' }}>Login <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button>
+          </form>
+          <p id="recovery" class="recovery">An administrator can reset the password on this computer with <code>python app.py reset-password USERNAME</code>.</p>
+          <div class="security-icons" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7 12 3l8 4-8 4-8-4Zm0 5 8 4 8-4M4 17l8 4 8-4"/></svg><svg viewBox="0 0 24 24"><path d="M4 17h16a3 3 0 0 0 0-6h-1a7 7 0 0 0-14-1 4 4 0 0 0-1 7Z"/></svg><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div>
+        </div>
+      </div>
+    </section>
+    <footer class="site-foot"><strong>CYBERNET&nbsp; | &nbsp;ATTENDANCE PORTAL</strong><span>{{ school_name }}</span></footer>
+  </main>
+</body>
+</html>

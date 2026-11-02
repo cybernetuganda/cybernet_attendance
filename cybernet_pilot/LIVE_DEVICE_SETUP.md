@@ -12,7 +12,7 @@ No source-code edits are required at the site. Copy `.env.example` to `.env` on 
 | `DEVICE_DIRECTION` | `PUNCH` for terminal IN/OUT codes; use fixed `IN` or `OUT` only for a dedicated one-direction terminal. |
 | `PANDORA_USERNAME`, `PANDORA_PASSWORD`, `PANDORA_SENDER` | Credentials and approved sender for paid SMS. Scans work without them, but automatic SMS cannot be enabled. |
 | `PANDORA_MESSAGE_TYPE`, `PANDORA_SENDER_FIELD`, `PANDORA_API_URL` | Provider-specific values to confirm before the first paid submission. |
-| `DASHBOARD_PASSWORD`, `APP_SECRET` | Optional local access password and stable session key. |
+| `APP_SECRET`, `SESSION_COOKIE_SECURE` | Stable session signing key; use a secure cookie only when serving over HTTPS. Create an administrator account as described in AUTHENTICATION.md. |
 
 Leave `APP_MODE=device` and `POLL_SECONDS=10` for the first on-site test. Do not put real credentials in `.env.example` or commit `.env` to Git. Restart the app after changing `.env`; it reads settings at launch.
 

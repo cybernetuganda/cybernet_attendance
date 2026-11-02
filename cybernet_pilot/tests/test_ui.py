@@ -2,11 +2,12 @@ import sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from auth_support import sign_in
 
 class UiTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.old_db=a.DB;self.old_mode=a.MODE
-  a.DB=Path(self.tmp.name)/'ui.db';a.MODE='demo';a.init();self.client=a.app.test_client()
+  a.DB=Path(self.tmp.name)/'ui.db';a.MODE='demo';a.init();self.client=a.app.test_client();sign_in(a,self.client)
  def tearDown(self):
   a.DB=self.old_db;a.MODE=self.old_mode;self.tmp.cleanup()
  def test_six_pages_and_empty_pending_states(self):

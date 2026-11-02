@@ -26,7 +26,7 @@
       <a href="{{path}}" class="nav-link {{'active' if page==key else ''}}" {{'aria-current="page"'|safe if page==key else ''}}><svg><use href="#i-{{icon}}"/></svg><span>{{label}}</span></a>
       {% endfor %}
     </nav>
-    <div class="sidebar-footer" title="Configured institution">{{school_name}}</div>
+    <div class="sidebar-footer"><div title="Configured institution">{{school_name}}</div><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{csrf}}"><button type="submit" class="logout-button">Sign out</button></form></div>
   </aside>
   <div class="main-column">
     <header class="topbar">
@@ -34,7 +34,7 @@
       <div class="topbar-actions">
         <form class="header-search" method="get" action="/students" role="search"><svg><use href="#i-search"/></svg><input type="search" name="student_q" value="{{student_q if page=='students' else ''}}" placeholder="Search students by name, ID or phone" aria-label="Search students by name, ID or phone"></form>
         <a class="icon-button notification-link" href="/settings#sms-activity" title="Guardian SMS activity" aria-label="Guardian SMS activity"><svg><use href="#i-bell"/></svg></a>
-        <div class="operator"><span class="operator-avatar">LA</span><span class="operator-label"><strong>Local operator</strong><small>{{mode|title}} mode</small></span></div>
+        <div class="operator"><span class="operator-avatar">{{ g.current_user['username'][:2]|upper }}</span><span class="operator-label"><strong>{{ g.current_user['username'] }}</strong><small>{{mode|title}} mode</small></span></div>
       </div>
       <form class="mobile-search" method="get" action="/students" role="search"><svg><use href="#i-search"/></svg><input type="search" name="student_q" value="{{student_q if page=='students' else ''}}" placeholder="Search students by name, ID or phone" aria-label="Search students by name, ID or phone"></form>
     </header>
