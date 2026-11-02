@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import timedelta
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from auth_support import sign_in
 class AttendanceTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();a.DB=Path(self.tmp.name)/'db.sqlite3';a.init()
@@ -10,7 +11,7 @@ class AttendanceTests(unittest.TestCase):
    c.execute("INSERT INTO students VALUES('001','Alice','P5','',0)")
    for i in range(32):c.execute('INSERT INTO events VALUES(?,?,?,?,?,?,?)',(str(i),'001','Alice','IN' if i%2==0 else 'OUT',f'2026-10-29T09:{i:02d}:00','K40','Missing guardian consent or phone'))
    c.execute("INSERT INTO events VALUES('other','002','Bob','IN','2026-10-28T09:00:00','DEMO','Eligible')")
-  self.client=a.app.test_client()
+  self.client=a.app.test_client();sign_in(a,self.client)
  def tearDown(self):self.tmp.cleanup()
  def test_pagination(self):
   with a.db() as c:

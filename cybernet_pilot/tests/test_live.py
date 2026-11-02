@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from auth_support import sign_in
 
 class LiveModeTests(unittest.TestCase):
  def setUp(self):
@@ -14,8 +15,7 @@ class LiveModeTests(unittest.TestCase):
   self.env=patch.dict(os.environ,{'SCHOOL_NAME':'Test School','DEVICE_IP':'192.168.1.42','DEVICE_PORT':'4370','DEVICE_COMM_KEY':'0','DEVICE_FORCE_UDP':'false','DEVICE_DIRECTION':'PUNCH','POLL_SECONDS':'10','SMS_PROVIDER':'pandora','PANDORA_USERNAME':'','PANDORA_PASSWORD':'','PANDORA_SENDER':''});self.env.start()
   a.DB=Path(self.tmp.name)/'live.db';a.MODE='device';a.auto_sms=False;a.worker_thread=None;a.sms_thread=None
   a.state.update(device='Not tested',worker='Stopped',last_poll=None,last_error=None);a.retry_event.clear();a.init()
-  self.client=a.app.test_client();self.client.get('/')
-  with self.client.session_transaction() as session:self.csrf=session['csrf']
+  self.client=a.app.test_client();self.csrf=sign_in(a,self.client)
  def tearDown(self):
   a.DB=self.old_db;a.MODE=self.old_mode;a.auto_sms=False;a.worker_thread=self.old_thread;a.sms_thread=self.old_sms_thread
   a.state.clear();a.state.update(self.old_state);a.retry_event.clear();self.env.stop();self.tmp.cleanup()

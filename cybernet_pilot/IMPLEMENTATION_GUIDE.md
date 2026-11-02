@@ -103,7 +103,7 @@ A scan records verification at the terminal; it does not independently prove phy
 - On internet recovery, delayed attendance is visible but does not trigger misleading current alerts.
 - Baseline is specific to this pilot database and one device. Do not repoint a baselined database at a different terminal. Use a separate clean database path for a new device.
 - Polling reads the retained device history each cycle. This is adequate only for a small pilot; measure performance with full K40 logs before scaling. The code does not disable the terminal, clear records or upload biometric templates.
-- Dashboard binds only to localhost. Use it on the presentation laptop. Set DASHBOARD_PASSWORD before use with personal records. Shared/network deployment needs a proper server, HTTPS, authentication, roles, monitoring and deployment work.
+- Dashboard binds only to localhost. Create an administrator account with `python app.py create-admin` before use with personal records. Shared/network deployment needs a proper server, HTTPS, roles, monitoring and deployment work. See AUTHENTICATION.md.
 - One message/guardian per event. No absence rule, early-exit authorisation or pickup verification yet.
 - Close the program to stop polling. It is not installed as a Windows background service.
 

@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import timedelta
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from auth_support import sign_in
 class PilotTests(unittest.TestCase):
  def setUp(self):
   self.temp=tempfile.TemporaryDirectory(); a.DB=Path(self.temp.name)/'test.db'; a.init()
@@ -20,6 +21,7 @@ class PilotTests(unittest.TestCase):
  def test_in_out_and_dashboard(self):
   t=a.now(); a.ingest('1001',t,0); a.ingest('1001',t,1); self.assertEqual(self.count(),2)
   with a.app.test_client() as c:
+   sign_in(a,c)
    self.assertEqual(c.get('/').status_code,200); self.assertEqual(c.post('/demo',data={}).status_code,403)
  def test_first_poll_baseline_then_new_scan(self):
   from unittest.mock import patch

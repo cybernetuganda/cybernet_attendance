@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from auth_support import sign_in
 class AutoTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();a.DB=Path(self.tmp.name)/'test.db';a.init();self.old=a.MODE;a.MODE='device';a.auto_sms=True
@@ -32,7 +33,6 @@ class AutoTests(unittest.TestCase):
  def test_pause_and_ack(self):
   a.ingest('1',a.now(),0)
   with a.app.test_client() as c:
-   c.get('/')
-   with c.session_transaction() as sess:token=sess['csrf']
+   token=sign_in(a,c)
    c.post('/sms-control',data={'csrf':token,'action':'pause'});self.assertFalse(a.auto_sms);self.assertEqual(self.status(),'CANCELLED')
    c.post('/sms-control',data={'csrf':token,'action':'enable'});self.assertFalse(a.auto_sms)

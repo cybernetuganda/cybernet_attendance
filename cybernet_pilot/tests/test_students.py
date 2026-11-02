@@ -2,10 +2,10 @@ import io,sys,tempfile,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import app as a
+from auth_support import sign_in
 class StudentTests(unittest.TestCase):
  def setUp(self):
-  self.tmp=tempfile.TemporaryDirectory();a.DB=Path(self.tmp.name)/'test.db';a.init();self.c=a.app.test_client();self.c.get('/')
-  with self.c.session_transaction() as s:self.token=s['csrf']
+  self.tmp=tempfile.TemporaryDirectory();a.DB=Path(self.tmp.name)/'test.db';a.init();self.c=a.app.test_client();self.token=sign_in(a,self.c)
  def tearDown(self):self.tmp.cleanup()
  def post(self,path,data):return self.c.post(path,data=dict(data,csrf=self.token),follow_redirects=True)
  def student(self):return dict(id='001',name='Student A',class_name='P5',phone='+256700000000',consent='on')

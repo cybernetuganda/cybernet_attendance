@@ -15,6 +15,7 @@ py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
 # Enter real SCHOOL_NAME, DEVICE_IP and Pandora settings in the ignored .env.
+.venv\Scripts\python.exe app.py create-admin
 .venv\Scripts\python.exe app.py
 ```
 Open http://127.0.0.1:5000 . Python 3.11/3.12 recommended. Alternatively run start_windows.bat. Linux developers can use a Python venv and run python app.py. The release ZIP's source/ folder is also a clean working copy if Git is unavailable.
@@ -36,7 +37,7 @@ Open http://127.0.0.1:5000 . Python 3.11/3.12 recommended. Alternatively run sta
 | Automatic mode | Enable/Pause acknowledgement; persistent queue; separate dispatch thread; counters; OFF after restart |
 | Reliability | Persistent exact-event deduplication, 60-second same-direction repeat suppression, baseline/history handling, uncertain submissions never auto-retried |
 | UI | Six pages with live IN/OUT counts, scan feed and connection state; data panels update every 10 seconds without replacing open forms |
-| Access | Localhost bind, optional dashboard password, POST CSRF checks, upload size limit |
+| Access | Localhost bind, administrator login with hashed passwords, signed sessions, POST CSRF checks, login attempt lockout, upload size limit |
 | Change history | Local student create/update action timestamps; no staff identity or audit viewer |
 
 ## Code map and storage
@@ -74,7 +75,7 @@ The 37 tests use temporary databases and mocked device/provider responses. Brows
 ## Immediate developer priorities
 1. Reproduce one MTN failure with the current diagnostic adapter; inspect provider-side records and confirm canonical endpoint, message type and response schema. Never log credentials or automatically resend ambiguous submissions.
 2. Add multi-device identities/configuration and per-device baselines before delivering two-terminal central operation. Current source identity is the literal K40, so shared-database multi-device use would collide. Do not run multiple copies against the same database as a workaround.
-3. Add users/roles, a production WSGI service, controlled startup, backups, monitoring and delivery tracking before shared production deployment. Polling currently reads retained device history every cycle; measure and improve this for larger registers.
+3. Add role-based permissions and guardian self-service, a production WSGI service, controlled startup, backups, monitoring and delivery tracking before shared production deployment. Polling currently reads retained device history every cycle; measure and improve this for larger registers. See cybernet_pilot/AUTHENTICATION.md for account setup and recovery.
 4. Add church-specific session/roll-call reports and authorised pickup workflow only after scope approval. Current records are scans, not proof of physical passage, an absence register or pickup authorisation.
 
 ## Upgrade and commercial notes
